@@ -15,7 +15,7 @@ st.markdown("""
 .subtle {color:#8A8F98; margin:0 0 1.0rem 0;}
 .kpi .stMetric {text-align:center}
 </style>
-<div class="big-title">⚽ Scouting LaLiga — Radar de rendimiento</div>
+<div class="big-title"> Scouting Hub — Radar de rendimiento de las 5 grandes ligas</div>
 <p class="subtle">Análisis operativo para dirección deportiva: jugadores con ≥900′, métricas por 90’ y porcentajes (0–100). Filtros por competición, <b>rol táctico</b> y temporada.</p>
 """, unsafe_allow_html=True)
 
@@ -294,3 +294,4 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
