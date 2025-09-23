@@ -5,14 +5,13 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
-from sklearn.preprocessing import MinMaxScaler
 
 # ---------------------------------------------------------
 # Config
 # ---------------------------------------------------------
 st.set_page_config(page_title="Scouting LaLiga", layout="wide")
 
-# Encabezado bonito
+# Encabezado
 st.markdown("""
 <style>
 .big-title {font-size:2.0rem; font-weight:800; margin:0 0 0.1rem 0;}
@@ -46,8 +45,13 @@ if df.empty:
     st.stop()
 
 # ---------------------------------------------------------
-# Utilidades
+# Helpers
 # ---------------------------------------------------------
+def normalize_0_1_array(arr, axis=0):
+    mn = arr.min(axis=axis, keepdims=True)
+    mx = arr.max(axis=axis, keepdims=True)
+    return (arr - mn) / (mx - mn + 1e-9)
+
 def percentiles_por_pos(df_in, cols, pos_col="Pos"):
     df = df_in.copy()
     for c in cols:
@@ -56,27 +60,35 @@ def percentiles_por_pos(df_in, cols, pos_col="Pos"):
     return df
 
 def score_compuesto(df_in, cols_peso):
-    # cols_peso = {"xG_per90":0.4, "xA_per90":0.3, "Sh_per90":0.3}
+    """Score sin scikit-learn: normaliza 0–1 por columna y pondera."""
     use_cols = [c for c in cols_peso.keys() if c in df_in.columns]
-    if not use_cols: 
+    if not use_cols:
         return df_in.copy()
-    base = df_in[use_cols].astype(float)
-    scaler = MinMaxScaler()
-    base = pd.DataFrame(scaler.fit_transform(base), columns=use_cols, index=df_in.index)
+    base = df_in[use_cols].astype(float).copy()
+    mn = base.min(axis=0)
+    mx = base.max(axis=0)
+    base = (base - mn) / (mx - mn + 1e-9)
     score = sum(base[c] * w for c, w in cols_peso.items() if c in base.columns)
     out = df_in.copy()
     out["Score"] = score.round(3)
     return out
 
-def normalize_0_1(arr, axis=0):
-    mn = arr.min(axis=axis, keepdims=True)
-    mx = arr.max(axis=axis, keepdims=True)
-    return (arr - mn) / (mx - mn + 1e-9)
+# ---------------------------------------------------------
+# Query params (nuevo API) -> defaults para filtros
+# ---------------------------------------------------------
+params = dict(st.query_params)
 
-# ---------------------------------------------------------
-# Parámetros de URL (para compartir estado)
-# ---------------------------------------------------------
-params = st.experimental_get_query_params()
+def _to_list(v):
+    if v is None: 
+        return []
+    return v if isinstance(v, list) else [v]
+
+comp_pre = _to_list(params.get("comp"))
+rol_pre  = _to_list(params.get("rol"))
+pos_pre  = _to_list(params.get("pos"))
+min_pre  = int(params.get("min", 900))      # por defecto 900′
+age_from = int(params.get("age_from", 15))
+age_to   = int(params.get("age_to", 40))
 
 # ---------------------------------------------------------
 # Filtros
@@ -87,22 +99,26 @@ comp_opts = sorted(df["Comp"].dropna().unique())
 rol_opts  = sorted(df["Rol_Tactico"].dropna().unique())
 pos_opts  = sorted(df["Pos"].dropna().unique())
 
-comp = st.sidebar.multiselect("Competición", comp_opts, default=[])
-rol  = st.sidebar.multiselect("Rol táctico", rol_opts, default=[])
-pos  = st.sidebar.multiselect("Posición", pos_opts, default=[])
+comp = st.sidebar.multiselect("Competición", comp_opts, default=comp_pre)
+rol  = st.sidebar.multiselect("Rol táctico", rol_opts, default=rol_pre)
+pos  = st.sidebar.multiselect("Posición", pos_opts, default=pos_pre)
 
 min_min = int(df["Min"].min()) if "Min" in df else 0
 min_max = int(df["Min"].max()) if "Min" in df else 3000
-min_sel = st.sidebar.slider("Minutos (≥)", min_value=min_min, max_value=min_max, value=min_min)
+# valor por defecto: 900 si cae dentro del rango; si no, el mínimo permitido
+default_min = int(np.clip(900, min_min, min_max)) if "Min" in df else min_min
+min_sel = st.sidebar.slider("Minutos (≥)", min_value=min_min, max_value=min_max, value=default_min)
 
 age_num = pd.to_numeric(df.get("Age", pd.Series(dtype=float)), errors="coerce")
 if age_num.size:
     age_min, age_max = int(np.nanmin(age_num)), int(np.nanmax(age_num))
 else:
     age_min, age_max = 15, 40
-age_range = st.sidebar.slider("Edad", min_value=age_min, max_value=age_max, value=(age_min, age_max))
+age_default = (max(age_min, age_from), min(age_max, age_to))
+age_range = st.sidebar.slider("Edad", min_value=age_min, max_value=age_max, value=age_default)
 
-mask = (df["Min"] >= min_sel)
+# Filtro aplicado
+mask = (df["Min"] >= min_sel) if "Min" in df else True
 if age_num.size:
     mask &= age_num.between(age_range[0], age_range[1])
 if comp: mask &= df["Comp"].isin(comp)
@@ -111,10 +127,15 @@ if pos:  mask &= df["Pos"].isin(pos)
 
 dff = df.loc[mask].copy()
 
-# guarda el estado en la URL
-st.experimental_set_query_params(
-    comp=comp, rol=rol, pos=pos, min=min_sel, age_from=age_range[0], age_to=age_range[1]
-)
+# actualiza URL con estado actual
+st.query_params.update({
+    "comp": comp,
+    "rol":  rol,
+    "pos":  pos,
+    "min":  str(min_sel),
+    "age_from": str(age_range[0]),
+    "age_to":   str(age_range[1]),
+})
 
 # ---------------------------------------------------------
 # Métricas base
@@ -138,25 +159,29 @@ tab_overview, tab_ranking, tab_compare, tab_similarity, tab_shortlist = st.tabs(
 
 # =============== OVERVIEW ===============
 with tab_overview:
+    # KPIs (sobre jugadores con ≥900′ para consistencia del resumen)
+    dff_overview = dff[dff["Min"] >= 900] if "Min" in dff else dff
+
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Jugadores", f"{len(dff):,}")
-    c2.metric("Equipos", f"{dff['Squad'].nunique()}")
+    c1.metric("Jugadores", f"{len(dff_overview):,}")
+    c2.metric("Equipos", f"{dff_overview['Squad'].nunique()}")
     try:
-        c3.metric("Media edad", f"{pd.to_numeric(dff['Age'], errors='coerce').mean():.1f}")
+        c3.metric("Media edad", f"{pd.to_numeric(dff_overview['Age'], errors='coerce').mean():.1f}")
     except Exception:
         c3.metric("Media edad", "—")
-    c4.metric("Minutos medianos", f"{int(dff['Min'].median()) if 'Min' in dff else 0}")
+    c4.metric("Minutos medianos", f"{int(dff_overview['Min'].median()) if 'Min' in dff_overview else 0}")
 
     # Dispersión xG vs Goles
-    if all(c in dff.columns for c in ["xG_per90","Gls_per90"]):
+    if all(c in dff_overview.columns for c in ["xG_per90","Gls_per90"]):
         fig = px.scatter(
-            dff, x="xG_per90", y="Gls_per90", hover_name="Player",
-            color=dff.get("Pos", None), size=dff.get("SoT_per90", None),
+            dff_overview, x="xG_per90", y="Gls_per90", hover_name="Player",
+            color=dff_overview.get("Pos", None),
+            size=dff_overview.get("SoT_per90", None),
             title="Productividad ofensiva: xG/90 vs Goles/90"
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("No hay columnas xG_per90/Gls_per90 en el subconjunto actual.")
+        st.info("No hay columnas xG_per90 / Gls_per90 en el subconjunto actual.")
 
 # =============== RANKING ===============
 with tab_ranking:
@@ -211,7 +236,7 @@ with tab_compare:
 
     def radar(df_in, pA, pB, feats):
         S = df_in[feats].astype(float)
-        S = normalize_0_1(S.to_numpy(), axis=0)
+        S = normalize_0_1_array(S.to_numpy(), axis=0)
         S = pd.DataFrame(S, columns=feats, index=df_in.index)
         A = S[df_in["Player"]==pA].mean(numeric_only=True).fillna(0)
         B = S[df_in["Player"]==pB].mean(numeric_only=True).fillna(0)
@@ -232,7 +257,7 @@ with tab_similarity:
 
     if feats_sim and target:
         X = dff[feats_sim].astype(float).fillna(0.0).to_numpy()
-        X = normalize_0_1(X, axis=0)
+        X = normalize_0_1_array(X, axis=0)
         # vector del jugador objetivo
         idx = dff.index[dff["Player"]==target][0]
         v = X[dff.index.get_loc(idx)]
