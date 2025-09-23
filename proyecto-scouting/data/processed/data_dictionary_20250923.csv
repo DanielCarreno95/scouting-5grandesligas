@@ -1,0 +1,46 @@
+﻿column,dtype,notes
+Player,object,
+Nation,object,
+Pos,object,
+Rol_Tactico,object,
+Squad,object,
+Comp,object,
+Season,object,
+Age,float64,
+Born,object,
+MP,int64,
+Starts,int64,
+Min,float64,tiempo de juego
+90s,float64,tiempo de juego
+Gls_per90,float64,por 90’
+xG_per90,float64,por 90’
+Sh_per90,float64,por 90’
+SoT_per90,float64,por 90’
+G/SoT_per90,float64,por 90’
+xA_per90,float64,por 90’
+xAG_per90,float64,por 90’
+KP_per90,float64,por 90’
+GCA90_per90,float64,por 90’
+SCA_per90,float64,por 90’
+1/3_per90,float64,por 90’
+PPA_per90,float64,por 90’
+PrgP_per90,float64,por 90’
+PrgC_per90,float64,por 90’
+Carries_per90,float64,por 90’
+Cmp%,float64,porcentaje (0–100)
+Cmp_per90,float64,por 90’
+TotDist_per90,float64,por 90’
+Tkl+Int_per90,float64,por 90’
+Int_per90,float64,por 90’
+Recov_per90,float64,por 90’
+Blocks_per90,float64,por 90’
+Clr_per90,float64,por 90’
+Touches_per90,float64,por 90’
+Dis_per90,float64,por 90’
+Err_per90,float64,por 90’
+Save%,float64,porcentaje (0–100)
+PSxG+/-_per90,float64,por 90’
+PSxG_per90,float64,por 90’
+CS%,float64,porcentaje (0–100)
+Saves_per90,float64,por 90’
+Launch%,float64,porcentaje (0–100)

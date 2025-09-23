@@ -1,0 +1,14 @@
+{
+  "created_at": "2025-09-23T11:43:56",
+  "rows": 4938,
+  "cols": 45,
+  "files": {
+    "main": "scouting_laliga_df_final_20250923.parquet",
+    "data_dictionary": "data_dictionary_20250923.csv"
+  },
+  "filters": {
+    "minutes_min": 900
+  },
+  "scaling": "MinMax por Comp + Rol_Tactico",
+  "percent_scale": "0–100"
+}
