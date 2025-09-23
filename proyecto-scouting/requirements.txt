@@ -4,4 +4,4 @@ plotly
 numpy
 pyarrow
 fastparquet
-
+scikit-learn
