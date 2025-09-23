@@ -1,5 +1,7 @@
 pandas
-fastparquet
-plotly
 streamlit
+plotly
 numpy
+pyarrow
+fastparquet
+
