@@ -16,7 +16,7 @@ st.markdown("""
 .kpi .stMetric {text-align:center}
 </style>
 <div class="big-title">⚽ Scouting LaLiga — Radar de rendimiento</div>
-<p class="subtle">Análisis operativo para dirección deportiva: jugadores con ≥900′, métricas por 90’ y porcentajes (0–100). Filtros por competición, rol y posición.</p>
+<p class="subtle">Análisis operativo para dirección deportiva: jugadores con ≥900′, métricas por 90’ y porcentajes (0–100). Filtros por competición, <b>rol táctico</b> y temporada.</p>
 """, unsafe_allow_html=True)
 
 # ===================== Carga de datos =====================
@@ -46,54 +46,37 @@ def normalize_0_1(df_num: pd.DataFrame) -> pd.DataFrame:
     mx = df_num.max(axis=0)
     return (df_num - mn) / (mx - mn + 1e-9)
 
-def pos_to_spanish(pos_value: str) -> str:
-    """
-    Convierte códigos tipo 'DF', 'MF,FW' -> 'Defensa', 'Centrocampista / Delantero'.
-    Si en tus datos existiesen códigos más finos (LW/RW/DM/AM), aquí los mapearías también.
-    """
-    if pd.isna(pos_value):
-        return "N/D"
-    base = {"GK": "Portero", "DF": "Defensa", "MF": "Centrocampista", "FW": "Delantero"}
-    parts = [p.strip() for p in str(pos_value).split(",")]
-    traducidas = [base.get(p, p) for p in parts]
-    # Quita duplicados manteniendo orden
-    seen, out = set(), []
-    for t in traducidas:
-        if t not in seen:
-            seen.add(t); out.append(t)
-    return " / ".join(out)
-
-# Campo de posición en español para UI y gráficas
-df["Pos_ES"] = df.get("Pos", pd.Series(dtype=str)).apply(pos_to_spanish)
-
 # ===================== Query params (nueva API) ==========
 params = dict(st.query_params)
 def _to_list(v): return [] if v is None else (v if isinstance(v, list) else [v])
 
-comp_pre = _to_list(params.get("comp"))
-rol_pre  = _to_list(params.get("rol"))
-pos_pre  = _to_list(params.get("pos"))
-min_pre  = int(params.get("min", 900))
-age_from = int(params.get("age_from", 15))
-age_to   = int(params.get("age_to", 40))
+comp_pre   = _to_list(params.get("comp"))
+rol_pre    = _to_list(params.get("rol"))          # Rol_Tactico
+season_pre = _to_list(params.get("season"))
+min_pre    = int(params.get("min", 900))
+age_from   = int(params.get("age_from", 15))
+age_to     = int(params.get("age_to", 40))
 
-# ===================== Filtros (con slider + input) ======
+# ===================== Filtros ===========================
 st.sidebar.header("Filtros")
 
-comp_opts = sorted(df["Comp"].dropna().unique())
-rol_opts  = sorted(df["Rol_Tactico"].dropna().unique())
-pos_opts  = sorted(df["Pos_ES"].dropna().unique())
+comp_opts   = sorted(df["Comp"].dropna().unique())
+rol_opts    = sorted(df["Rol_Tactico"].dropna().unique())
+season_opts = sorted(df["Season"].dropna().unique())
 
-comp = st.sidebar.multiselect("Competición", comp_opts, default=comp_pre)
-rol  = st.sidebar.multiselect("Rol táctico", rol_opts, default=rol_pre)
-pos  = st.sidebar.multiselect("Posición", pos_opts, default=pos_pre)
+comp   = st.sidebar.multiselect("Competición", comp_opts, default=comp_pre)
+rol    = st.sidebar.multiselect("Rol táctico (posición funcional)", rol_opts, default=rol_pre)
+season = st.sidebar.multiselect("Temporada", season_opts, default=season_pre)
 
-# Minutos
-min_min = int(df["Min"].min()) if "Min" in df else 0
-min_max = int(df["Min"].max()) if "Min" in df else 3000
-default_min = int(np.clip(900, min_min, min_max))
-min_sel_slider = st.sidebar.slider("Minutos (≥)", min_value=min_min, max_value=min_max, value=default_min, key="mins_slider")
-min_sel = st.sidebar.number_input("Escribir minutos (≥)", min_value=min_min, max_value=min_max, value=int(min_sel_slider), step=30, key="mins_num")
+# Minutos: mínimo 900 (no se permite bajar de ahí)
+global_min = max(900, int(df["Min"].min())) if "Min" in df else 900
+global_max = int(df["Min"].max()) if "Min" in df else 3420
+default_min = int(np.clip(900, global_min, global_max))
+
+min_sel_slider = st.sidebar.slider("Minutos jugados (≥)", min_value=global_min, max_value=global_max,
+                                   value=default_min, key="mins_slider")
+min_sel = st.sidebar.number_input("Escribir minutos (≥)", min_value=global_min, max_value=global_max,
+                                  value=int(min_sel_slider), step=30, key="mins_num")
 
 # Edad
 age_num = pd.to_numeric(df.get("Age", pd.Series(dtype=float)), errors="coerce")
@@ -102,28 +85,31 @@ if age_num.size:
 else:
     age_min, age_max = 15, 40
 age_default = (max(age_min, age_from), min(age_max, age_to))
-age_range_slider = st.sidebar.slider("Edad (rango)", min_value=age_min, max_value=age_max, value=age_default, key="age_slider")
-age_min_num = st.sidebar.number_input("Edad mínima", min_value=age_min, max_value=age_max, value=int(age_range_slider[0]), step=1, key="age_min_num")
-age_max_num = st.sidebar.number_input("Edad máxima", min_value=age_min, max_value=age_max, value=int(age_range_slider[1]), step=1, key="age_max_num")
+age_range_slider = st.sidebar.slider("Edad (rango)", min_value=age_min, max_value=age_max,
+                                     value=age_default, key="age_slider")
+age_min_num = st.sidebar.number_input("Edad mínima", min_value=age_min, max_value=age_max,
+                                      value=int(age_range_slider[0]), step=1, key="age_min_num")
+age_max_num = st.sidebar.number_input("Edad máxima", min_value=age_min, max_value=age_max,
+                                      value=int(age_range_slider[1]), step=1, key="age_max_num")
 age_range = (int(min(age_min_num, age_max_num)), int(max(age_min_num, age_max_num)))
 
 # Aplica filtros
 mask = (df["Min"] >= min_sel) if "Min" in df else True
 if age_num.size: mask &= age_num.between(age_range[0], age_range[1])
-if comp: mask &= df["Comp"].isin(comp)
-if rol:  mask &= df["Rol_Tactico"].isin(rol)
-if pos:  mask &= df["Pos_ES"].isin(pos)
+if comp:   mask &= df["Comp"].isin(comp)
+if rol:    mask &= df["Rol_Tactico"].isin(rol)
+if season: mask &= df["Season"].isin(season)
 
 dff = df.loc[mask].copy()
 
 # Escribe estado en URL
 st.query_params.update({
-    "comp": comp, "rol": rol, "pos": pos,
+    "comp": comp, "rol": rol, "season": season,
     "min": str(min_sel),
     "age_from": str(age_range[0]), "age_to": str(age_range[1]),
 })
 
-# ===================== Métricas base (según vista) =======
+# ===================== Métricas ===================================================
 gk_metrics = ["Save%", "PSxG+/-_per90", "PSxG_per90", "Saves_per90", "CS%", "Launch%"]
 out_metrics = [
     "Gls_per90","xG_per90","NPxG_per90","Sh_per90","SoT_per90","G/SoT_per90",
@@ -131,17 +117,25 @@ out_metrics = [
     "PrgP_per90","PrgC_per90","Carries_per90",
     "Cmp%","Cmp_per90","Tkl+Int_per90","Int_per90","Recov_per90"
 ]
-# Si el filtro de Pos incluye Portero, no forzamos vista GK; lo decides en Ranking/Comparador
 metrics_all = [m for m in out_metrics if m in dff.columns]
 
-# ===================== Tabs ===============================
+# ===================== Tabs ===============================================
 tab_overview, tab_ranking, tab_compare, tab_similarity, tab_shortlist = st.tabs(
     ["📊 Overview", "🏆 Ranking", "🆚 Comparador", "🧬 Similares", "⭐ Shortlist"]
 )
 
-# ===================== OVERVIEW ==========================
+# ===================== Mensaje si no hay jugadores =========================
+def stop_if_empty(dfx):
+    if len(dfx) == 0:
+        st.warning("No hay jugadores que cumplan con estas condiciones de filtro. "
+                   "Prueba a bajar el umbral de minutos, ampliar las edades o seleccionar más roles/temporadas.")
+        st.stop()
+
+# ===================== OVERVIEW ===========================================
 with tab_overview:
-    # KPIs sobre el subconjunto filtrado (coherentes con el usuario)
+    stop_if_empty(dff)
+
+    # KPIs sobre el subconjunto filtrado
     k1, k2, k3, k4 = st.columns(4, gap="large")
     with k1: st.metric("Jugadores (en filtro)", f"{len(dff):,}")
     with k2: st.metric("Equipos (en filtro)", f"{dff['Squad'].nunique()}")
@@ -151,7 +145,7 @@ with tab_overview:
         except Exception:
             st.metric("Media de edad (en filtro)", "—")
     with k4:
-        med = int(dff["Min"].median()) if "Min" in dff else 0
+        med = int(dff["Min"].median()) if "Min" in dff and len(dff) else 0
         st.metric("Minutos medianos (en filtro)", f"{med:,}")
 
     # ===== Productividad ofensiva =====
@@ -159,9 +153,9 @@ with tab_overview:
     if all(c in dff.columns for c in ["xG_per90","Gls_per90"]):
         fig = px.scatter(
             dff, x="xG_per90", y="Gls_per90",
-            color="Pos_ES", size=dff.get("SoT_per90", None),
+            color="Rol_Tactico", size=dff.get("SoT_per90", None),
             hover_name="Player",
-            labels={"xG_per90":"xG por 90", "Gls_per90":"Goles por 90", "Pos_ES":"Posición", "SoT_per90":"Tiros a puerta/90"},
+            labels={"xG_per90":"xG por 90", "Gls_per90":"Goles por 90", "Rol_Tactico":"Rol táctico", "SoT_per90":"Tiros a puerta/90"},
             template="plotly_dark"
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -173,8 +167,8 @@ with tab_overview:
     if all(c in dff.columns for c in ["xA_per90","KP_per90","GCA90_per90"]):
         fig = px.scatter(
             dff, x="xA_per90", y="KP_per90",
-            size="GCA90_per90", color="Pos_ES", hover_name="Player",
-            labels={"xA_per90":"xA por 90", "KP_per90":"Pases clave por 90", "GCA90_per90":"Acciones que generan gol/90", "Pos_ES":"Posición"},
+            size="GCA90_per90", color="Rol_Tactico", hover_name="Player",
+            labels={"xA_per90":"xA por 90", "KP_per90":"Pases clave por 90", "GCA90_per90":"Acciones que generan gol/90", "Rol_Tactico":"Rol táctico"},
             template="plotly_dark"
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -185,8 +179,8 @@ with tab_overview:
         top_prog = dff.sort_values("PrgP_per90", ascending=False).head(15)
         fig = px.bar(
             top_prog.sort_values("PrgP_per90"),
-            x="PrgP_per90", y="Player", color="Pos_ES",
-            labels={"PrgP_per90":"Pases progresivos por 90", "Player":"Jugador", "Pos_ES":"Posición"},
+            x="PrgP_per90", y="Player", color="Rol_Tactico",
+            labels={"PrgP_per90":"Pases progresivos por 90", "Player":"Jugador", "Rol_Tactico":"Rol táctico"},
             template="plotly_dark", orientation="h"
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -196,47 +190,49 @@ with tab_overview:
     if all(c in dff.columns for c in ["Tkl+Int_per90","Recov_per90","Int_per90"]):
         fig = px.scatter(
             dff, x="Tkl+Int_per90", y="Recov_per90", size="Int_per90",
-            color="Pos_ES", hover_name="Player",
-            labels={"Tkl+Int_per90":"Entradas + Intercepciones por 90", "Recov_per90":"Recuperaciones por 90", "Int_per90":"Intercepciones por 90"},
+            color="Rol_Tactico", hover_name="Player",
+            labels={"Tkl+Int_per90":"Entradas + Intercepciones por 90", "Recov_per90":"Recuperaciones por 90", "Int_per90":"Intercepciones por 90", "Rol_Tactico":"Rol táctico"},
             template="plotly_dark"
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    # ===== Pases (volumen vs precisión) =====
+    # ===== Pase =====
     st.markdown("### Pase: **Precisión** vs **Volumen**")
     if all(c in dff.columns for c in ["Cmp%","Cmp_per90"]):
         fig = px.scatter(
-            dff, x="Cmp%", y="Cmp_per90", color="Pos_ES", hover_name="Player",
-            labels={"Cmp%":"Precisión de pase (%)", "Cmp_per90":"Pases completados por 90", "Pos_ES":"Posición"},
+            dff, x="Cmp%", y="Cmp_per90", color="Rol_Tactico", hover_name="Player",
+            labels={"Cmp%":"Precisión de pase (%)", "Cmp_per90":"Pases completados por 90", "Rol_Tactico":"Rol táctico"},
             template="plotly_dark"
         )
         st.plotly_chart(fig, use_container_width=True)
 
     # ===== Porteros (si los hay) =====
-    if any(dff["Pos_ES"].str.contains("Portero", na=False)):
-        st.markdown("### Porteros: **% Paradas** vs **PSxG+/- por 90** (tamaño = Paradas/90)")
-        gk_df = dff[dff["Pos_ES"].str.contains("Portero", na=False)].copy()
-        needed = ["Save%","PSxG+/-_per90","Saves_per90"]
-        if all(c in gk_df.columns for c in needed):
+    if "Save%" in dff.columns and "PSxG+/-_per90" in dff.columns and "Saves_per90" in dff.columns:
+        # filtra si hay roles portero en Rol_Tactico
+        gk_df = dff[dff["Rol_Tactico"].str.contains("GK|Portero", case=False, na=False)].copy()
+        if len(gk_df):
+            st.markdown("### Porteros: **% Paradas** vs **PSxG+/- por 90** (tamaño = Paradas/90)")
             fig = px.scatter(
                 gk_df, x="Save%", y="PSxG+/-_per90", size="Saves_per90",
-                hover_name="Player",
-                labels={"Save%":"% Paradas", "PSxG+/-_per90":"PSxG +/- por 90", "Saves_per90":"Paradas por 90"},
+                hover_name="Player", color="Rol_Tactico",
+                labels={"Save%":"% Paradas", "PSxG+/-_per90":"PSxG +/- por 90", "Saves_per90":"Paradas por 90", "Rol_Tactico":"Rol táctico"},
                 template="plotly_dark"
             )
             st.plotly_chart(fig, use_container_width=True)
 
-# ===================== RANKING ===========================
+# ===================== RANKING ===========================================
 with tab_ranking:
-    st.subheader("Ranking por métrica (o Score compuesto en la siguiente iteración)")
+    stop_if_empty(dff)
+    st.subheader("Ranking por métrica")
     metric_to_rank = st.selectbox("Métrica para ordenar", metrics_all, index=0 if metrics_all else None)
     topn = st.slider("Top N", 5, 100, 20)
-    cols_show = ["Player","Squad","Season","Pos_ES","Rol_Tactico","Comp","Min","Age"] + metrics_all
+    cols_show = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"] + metrics_all
     tabla = dff[cols_show].sort_values(metric_to_rank, ascending=False).head(topn)
     st.dataframe(tabla, use_container_width=True)
 
-# ===================== COMPARADOR ========================
+# ===================== COMPARADOR ========================================
 with tab_compare:
+    stop_if_empty(dff)
     st.subheader("Comparador de jugadores (Radar)")
     players = dff["Player"].dropna().unique().tolist()
     cA, cB = st.columns(2)
@@ -259,8 +255,9 @@ with tab_compare:
     if p1 and p2 and radar_feats:
         st.plotly_chart(radar(dff, p1, p2, radar_feats), use_container_width=True)
 
-# ===================== SIMILARES =========================
+# ===================== SIMILARES =========================================
 with tab_similarity:
+    stop_if_empty(dff)
     st.subheader("Jugadores similares (cosine similarity)")
     feats_sim = st.multiselect("Selecciona 6–12 métricas", metrics_all, default=metrics_all[:8], key="sim_feats")
     target = st.selectbox("Jugador objetivo", dff["Player"].dropna().unique().tolist())
@@ -271,12 +268,13 @@ with tab_similarity:
         idx = dff.index[dff["Player"]==target][0]
         v = X[dff.index.get_loc(idx)]
         sims = (X @ v) / (norm(X, axis=1)*norm(v) + 1e-9)
-        out = dff[["Player","Squad","Season","Pos_ES","Rol_Tactico","Comp","Min","Age"]].copy()
+        out = dff[["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]].copy()
         out["similarity"] = sims
         st.dataframe(out.sort_values("similarity", ascending=False).head(25), use_container_width=True)
 
-# ===================== SHORTLIST =========================
+# ===================== SHORTLIST =========================================
 with tab_shortlist:
+    stop_if_empty(dff)
     st.subheader("Shortlist (lista de seguimiento)")
     if "shortlist" not in st.session_state: st.session_state.shortlist = []
     to_add = st.multiselect("Añadir jugadores", dff["Player"].dropna().unique().tolist())
