@@ -83,4 +83,30 @@ p1 = colA.selectbox("Jugador A", players, index=0 if players else None)
 p2 = colB.selectbox("Jugador B", players, index=1 if len(players)>1 else 0)
 
 def radar(df_in, pA, pB, feats):
-    # normaliza a 0–1 sobre el subc
+    # Normaliza a 0–1 sobre el subconjunto mostrado
+    S = df_in[feats].astype(float)
+    S = (S - S.min()) / (S.max() - S.min() + 1e-9)
+
+    A = S[df_in["Player"] == pA].mean(numeric_only=True).fillna(0)
+    B = S[df_in["Player"] == pB].mean(numeric_only=True).fillna(0)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatterpolar(r=A.values, theta=feats, fill="toself", name=pA))
+    fig.add_trace(go.Scatterpolar(r=B.values, theta=feats, fill="toself", name=pB))
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+        showlegend=True,
+    )
+    return fig
+
+radar_feats = st.multiselect("Métricas para el radar (elige 4–8)", metrics, default=metrics[:6])
+if p1 and p2 and radar_feats:
+    st.plotly_chart(radar(dff, p1, p2, radar_feats), use_container_width=True)
+
+# ---------- Descarga ----------
+st.download_button(
+    "Descargar datos filtrados (CSV)",
+    data=dff.to_csv(index=False).encode("utf-8-sig"),
+    file_name="scouting_laliga_filtrado.csv",
+    mime="text/csv",
+)
