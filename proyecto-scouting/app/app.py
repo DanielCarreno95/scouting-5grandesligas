@@ -459,6 +459,14 @@ with tab_compare:
             return (df_in["Comp"] == comp_ref)
         return pd.Series(True, index=df_in.index)
 
+    def _hex_to_rgba(hex_color: str, alpha: float) -> str:
+        """'#RRGGBB' -> 'rgba(r,g,b,a)'"""
+        hex_color = hex_color.lstrip("#")
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+        return f"rgba({r},{g},{b},{alpha:.2f})"
+
     # ---------- grupo de contexto ----------
     df_group = dff_view[_ctx_mask(dff_view)].copy()
     if df_group.empty:
@@ -480,8 +488,8 @@ with tab_compare:
     fig = go.Figure()
 
     # paleta marcada para distinguir bien
-    palette = ["#4F8BF9", "#F95F53", "#2BB673"]  # azul, coral, verde
-    fill_alphas = [0.30, 0.30, 0.30]
+    palette_hex = ["#4F8BF9", "#F95F53", "#2BB673"]  # azul, coral, verde
+    fill_alpha  = 0.30
 
     for i, pl in enumerate(sel_players):
         vec = S_norm[df_group["Player"] == pl].mean(numeric_only=True).fillna(0)
@@ -493,10 +501,10 @@ with tab_compare:
             r=vec[radar_feats].values,
             theta=theta_labels,
             name=pl,
-            line=dict(color=palette[i % len(palette)], width=3),
-            marker=dict(color=palette[i % len(palette)], size=6),
+            line=dict(color=palette_hex[i % len(palette_hex)], width=3),
+            marker=dict(color=palette_hex[i % len(palette_hex)], size=6),
             fill="toself",
-            fillcolor=palette[i % len(palette)] + f"{int(fill_alphas[i%3]*255):02x}",
+            fillcolor=_hex_to_rgba(palette_hex[i % len(palette_hex)], fill_alpha),  # ← FIX: rgba
             hovertemplate="<b>%{theta}</b><br>Índice 0–1: %{r:.3f}"
                           + ("<br>Percentil: %{customdata:.0%}" if (pct_pl is not None) else "")
                           + "<extra></extra>",
@@ -559,11 +567,9 @@ with tab_compare:
     st.markdown("**Tabla comparativa (valores crudos, Δ respecto al primer jugador seleccionado como referencia)**")
     st.dataframe(df_cmp, use_container_width=True)
 
-    # ---------- export (sin mensaje si no está kaleido) ----------
+    # ---------- export ----------
     try:
-        # si kaleido está disponible, mostramos botón PNG
-        import plotly.io as pio  # noqa: F401
-        png_bytes = fig.to_image(format="png", scale=2)  # necesita kaleido instalado
+        png_bytes = fig.to_image(format="png", scale=2)  # requiere 'kaleido'
         st.download_button(
             "🖼️ Descargar radar (PNG)",
             data=png_bytes,
@@ -572,7 +578,7 @@ with tab_compare:
             key="cmp_png_dl"
         )
     except Exception:
-        pass  # no mostrar mensaje si kaleido no está instalado
+        pass  # si no hay kaleido, no mostramos nada
 
     st.download_button(
         "⬇️ Descargar comparación (CSV)",
@@ -580,7 +586,8 @@ with tab_compare:
         file_name=f"comparacion_{'_vs_'.join(sel_players)}.csv",
         mime="text/csv",
         key="cmp_csv_dl"
-    )        
+    )
+
 # ===================== SIMILARES =========================
 with tab_similarity:
     stop_if_empty(dff_view)
@@ -639,6 +646,7 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
 
 
 
