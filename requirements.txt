@@ -5,3 +5,4 @@ numpy
 pyarrow
 fastparquet
 streamlit-aggrid
+streamlit-antd-components
