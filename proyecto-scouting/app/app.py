@@ -53,6 +53,73 @@ def _season_key(s: str) -> int:
     except:
         return -1
 
+# ---------- Nombres “deportivos” para métricas y campos ----------
+METRIC_LABELS = {
+    # Identidad / contexto
+    "Player": "Jugador", "Squad": "Equipo", "Season": "Temporada",
+    "Rol_Tactico": "Rol táctico", "Comp": "Competición", "Min": "Minutos", "Age": "Edad",
+
+    # Ofensivo / finalización
+    "Gls_per90": "Goles por 90",
+    "xG_per90": "Goles esperados por 90",
+    "NPxG_per90": "Goles esperados (Sin penaltis) por 90",
+    "Sh_per90": "Tiros por 90",
+    "SoT_per90": "Tiros a puerta por 90",
+    "G/SoT_per90": "Goles por tiro a puerta (90)",
+
+    # Creatividad
+    "xA_per90": "Asistencias esperadas por 90",
+    "xAG_per90": "Asistencias + Goles esperados por 90",
+    "KP_per90": "Pases clave por 90",
+    "GCA90_per90": "Acciones que generan gol por 90",
+    "SCA_per90": "Acciones que generan tiro por 90",
+    "1/3_per90": "Recuperaciones en último tercio por 90",
+    "PPA_per90": "Pases al área penal por 90",
+
+    # Progresión
+    "PrgP_per90": "Pases progresivos por 90",
+    "PrgC_per90": "Conducciones progresivas por 90",
+    "Carries_per90": "Conducciones por 90",
+    "TotDist_per90": "Distancia total por 90",
+
+    # Defensa
+    "Tkl+Int_per90": "Entradas + Intercepciones por 90",
+    "Int_per90": "Intercepciones por 90",
+    "Recov_per90": "Recuperaciones por 90",
+    "Blocks_per90": "Bloqueos por 90",
+    "Clr_per90": "Despejes por 90",
+
+    # Posesión / pérdidas / presión
+    "Touches_per90": "Toques por 90",
+    "Dis_per90": "Pérdidas por 90",
+    "Pressures_per90": "Presiones por 90",
+    "Err_per90": "Errores por 90",
+
+    # Pase
+    "Cmp%": "Precisión de pase (%)",
+    "Cmp_per90": "Pases completados por 90",
+
+    # Porteros
+    "Save%": "% Paradas",
+    "PSxG+/-_per90": "Goles evitados por 90",
+    "PSxG_per90": "Calidad de tiros recibidos por 90",
+    "Saves_per90": "Paradas por 90",
+    "CS%": "% Porterías a cero",
+    "Launch%": "% Saques largos",
+}
+
+def label(col: str) -> str:
+    return METRIC_LABELS.get(col, col)
+
+def labels_for(cols) -> dict:
+    """Devuelve un dict para plotly.labels con traducciones disponibles."""
+    return {c: label(c) for c in cols}
+
+def rename_for_display(df: pd.DataFrame, cols: list) -> pd.DataFrame:
+    """Devuelve un df con columnas renombradas SOLO para mostrar tablas."""
+    mapping = {c: label(c) for c in cols if c in df.columns}
+    return df[cols].rename(columns=mapping)
+
 # ===================== Query params (nueva API) ==========
 params = dict(st.query_params)
 def _to_list(v): return [] if v is None else (v if isinstance(v, list) else [v])
@@ -164,7 +231,7 @@ def render_overview_block(df_in):
             df_in, x="xG_per90", y="Gls_per90",
             color="Rol_Tactico", size=df_in.get("SoT_per90", None),
             hover_name="Player",
-            labels={"xG_per90":"xG por 90", "Gls_per90":"Goles por 90", "Rol_Tactico":"Rol táctico", "SoT_per90":"Tiros a puerta/90"},
+            labels=labels_for(["xG_per90","Gls_per90","Rol_Tactico","SoT_per90"]),
             template="plotly_dark"
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -177,7 +244,7 @@ def render_overview_block(df_in):
         fig = px.scatter(
             df_in, x="xA_per90", y="KP_per90",
             size="GCA90_per90", color="Rol_Tactico", hover_name="Player",
-            labels={"xA_per90":"xA por 90", "KP_per90":"Pases clave por 90", "GCA90_per90":"Acciones que generan gol/90", "Rol_Tactico":"Rol táctico"},
+            labels=labels_for(["xA_per90","KP_per90","GCA90_per90","Rol_Tactico"]),
             template="plotly_dark"
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -189,7 +256,7 @@ def render_overview_block(df_in):
         fig = px.bar(
             top_prog.sort_values("PrgP_per90"),
             x="PrgP_per90", y="Player", color="Rol_Tactico",
-            labels={"PrgP_per90":"Pases progresivos por 90", "Player":"Jugador", "Rol_Tactico":"Rol táctico"},
+            labels=labels_for(["PrgP_per90","Player","Rol_Tactico"]),
             template="plotly_dark", orientation="h"
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -200,7 +267,7 @@ def render_overview_block(df_in):
         fig = px.scatter(
             df_in, x="Tkl+Int_per90", y="Recov_per90", size="Int_per90",
             color="Rol_Tactico", hover_name="Player",
-            labels={"Tkl+Int_per90":"Entradas + Intercepciones por 90", "Recov_per90":"Recuperaciones por 90", "Int_per90":"Intercepciones por 90", "Rol_Tactico":"Rol táctico"},
+            labels=labels_for(["Tkl+Int_per90","Recov_per90","Int_per90","Rol_Tactico"]),
             template="plotly_dark"
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -210,7 +277,7 @@ def render_overview_block(df_in):
     if all(c in df_in.columns for c in ["Cmp%","Cmp_per90"]):
         fig = px.scatter(
             df_in, x="Cmp%", y="Cmp_per90", color="Rol_Tactico", hover_name="Player",
-            labels={"Cmp%":"Precisión de pase (%)", "Cmp_per90":"Pases completados por 90", "Rol_Tactico":"Rol táctico"},
+            labels=labels_for(["Cmp%","Cmp_per90","Rol_Tactico"]),
             template="plotly_dark"
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -223,21 +290,20 @@ def render_overview_block(df_in):
             fig = px.scatter(
                 gk_df, x="Save%", y="PSxG+/-_per90", size="Saves_per90",
                 hover_name="Player", color="Rol_Tactico",
-                labels={"Save%":"% Paradas", "PSxG+/-_per90":"PSxG +/- por 90", "Saves_per90":"Paradas por 90", "Rol_Tactico":"Rol táctico"},
+                labels=labels_for(["Save%","PSxG+/-_per90","Saves_per90","Rol_Tactico"]),
                 template="plotly_dark"
             )
             st.plotly_chart(fig, use_container_width=True)
 
 # ===================== OVERVIEW ===========================================
 with tab_overview:
-    # 2 sub-pestañas, pero conservando TUS gráficas tal cual
+    # 2 sub-pestañas, conservando TUS gráficas
     tab_hist, tab_cur = st.tabs(["📚 Histórico (≥900’)", "⏳ Temporada en curso"])
 
     # ---------- HISTÓRICO ----------
     with tab_hist:
-        # Si el usuario eligió temporadas, usamos esas, excluyendo la actual
         selected_seasons = set(season) if season else set(df["Season"].dropna().unique())
-        hist_seasons = [s for s in selected_seasons if s != current_season] if current_season else list(selected_seasons)
+        hist_seasons = [s for s in selected_seasons if s != (season_opts[-1] if season_opts else None)]
 
         df_hist = dff_base.copy()
         if hist_seasons:
@@ -252,6 +318,7 @@ with tab_overview:
 
     # ---------- TEMPORADA EN CURSO ----------
     with tab_cur:
+        current_season = season_opts[-1] if season_opts else None
         if current_season is None:
             st.info("No se pudo determinar la temporada actual.")
         else:
@@ -259,7 +326,6 @@ with tab_overview:
             if df_cur_all.empty:
                 st.warning(f"No hay jugadores de {current_season} con los filtros actuales.")
             else:
-                # Umbral independiente para esta vista (sin imponer 900′)
                 if "Min" in df_cur_all.columns:
                     cur_min_default = min(90, int(df_cur_all["Min"].max()))
                     cur_min = st.slider("Minutos (≥) — solo para temporada en curso",
@@ -280,11 +346,21 @@ with tab_overview:
 with tab_ranking:
     stop_if_empty(dff)
     st.subheader("Ranking por métrica")
-    metric_to_rank = st.selectbox("Métrica para ordenar", metrics_all, index=0 if metrics_all else None)
+
+    # Mostrar nombres deportivos en el selector, pero devolver la columna real
+    metric_to_rank = st.selectbox(
+        "Métrica para ordenar",
+        options=metrics_all,
+        index=0 if metrics_all else None,
+        format_func=lambda c: label(c)
+    )
     topn = st.slider("Top N", 5, 100, 20)
+
     cols_show = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"] + metrics_all
     tabla = dff[cols_show].sort_values(metric_to_rank, ascending=False).head(topn)
-    st.dataframe(tabla, use_container_width=True)
+
+    # Renombrar columnas SOLO para mostrar
+    st.dataframe(rename_for_display(tabla, cols_show), use_container_width=True)
 
 # ===================== COMPARADOR ========================================
 with tab_compare:
@@ -295,7 +371,13 @@ with tab_compare:
     p1 = cA.selectbox("Jugador A", players, index=0 if players else None, key="pA")
     p2 = cB.selectbox("Jugador B", players, index=1 if len(players)>1 else 0, key="pB")
 
-    radar_feats = st.multiselect("Métricas para el radar (elige 4–8)", metrics_all, default=metrics_all[:6], key="feats")
+    radar_feats = st.multiselect(
+        "Métricas para el radar (elige 4–8)",
+        options=metrics_all,
+        default=metrics_all[:6],
+        key="feats",
+        format_func=lambda c: label(c)
+    )
 
     def radar(df_in, pA, pB, feats):
         S = df_in[feats].astype(float)
@@ -303,8 +385,8 @@ with tab_compare:
         A = S[df_in["Player"]==pA].mean(numeric_only=True).fillna(0)
         B = S[df_in["Player"]==pB].mean(numeric_only=True).fillna(0)
         fig = go.Figure()
-        fig.add_trace(go.Scatterpolar(r=A.values, theta=feats, fill="toself", name=pA))
-        fig.add_trace(go.Scatterpolar(r=B.values, theta=feats, fill="toself", name=pB))
+        fig.add_trace(go.Scatterpolar(r=A.values, theta=[label(f) for f in feats], fill="toself", name=p1))
+        fig.add_trace(go.Scatterpolar(r=B.values, theta=[label(f) for f in feats], fill="toself", name=p2))
         fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0,1])), showlegend=True)
         return fig
 
@@ -315,7 +397,13 @@ with tab_compare:
 with tab_similarity:
     stop_if_empty(dff)
     st.subheader("Jugadores similares (cosine similarity)")
-    feats_sim = st.multiselect("Selecciona 6–12 métricas", metrics_all, default=metrics_all[:8], key="sim_feats")
+    feats_sim = st.multiselect(
+        "Selecciona 6–12 métricas",
+        options=metrics_all,
+        default=metrics_all[:8],
+        key="sim_feats",
+        format_func=lambda c: label(c)
+    )
     target = st.selectbox("Jugador objetivo", dff["Player"].dropna().unique().tolist())
     if feats_sim and target:
         X = dff[feats_sim].astype(float).fillna(0.0).to_numpy()
@@ -324,9 +412,13 @@ with tab_similarity:
         idx = dff.index[dff["Player"]==target][0]
         v = X[dff.index.get_loc(idx)]
         sims = (X @ v) / (norm(X, axis=1)*norm(v) + 1e-9)
+
+        out_cols = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age","similarity"]
         out = dff[["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]].copy()
         out["similarity"] = sims
-        st.dataframe(out.sort_values("similarity", ascending=False).head(25), use_container_width=True)
+        out = out.sort_values("similarity", ascending=False).head(25)
+
+        st.dataframe(rename_for_display(out, out_cols), use_container_width=True)
 
 # ===================== SHORTLIST =========================================
 with tab_shortlist:
@@ -338,9 +430,16 @@ with tab_shortlist:
     to_remove = st.multiselect("Eliminar de shortlist", st.session_state.shortlist)
     if st.button("🗑️ Eliminar seleccionados"): st.session_state.shortlist = [p for p in st.session_state.shortlist if p not in set(to_remove)]
     sh = dff[dff["Player"].isin(st.session_state.shortlist)]
-    st.dataframe(sh, use_container_width=True)
-    st.download_button("⬇️ Descargar shortlist (CSV)", data=sh.to_csv(index=False).encode("utf-8-sig"),
-                       file_name="shortlist_scouting.csv", mime="text/csv")
+
+    base_cols = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]
+    st.dataframe(rename_for_display(sh, base_cols), use_container_width=True)
+
+    st.download_button(
+        "⬇️ Descargar shortlist (CSV)",
+        data=sh[base_cols].to_csv(index=False).encode("utf-8-sig"),
+        file_name="shortlist_scouting.csv",
+        mime="text/csv",
+    )
 
 # ===================== Footer trazabilidad ===============
 meta = next(DATA_DIR.glob("metadata_*.json"), None)
