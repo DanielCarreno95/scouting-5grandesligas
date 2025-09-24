@@ -4,6 +4,7 @@ plotly
 numpy
 pyarrow
 fastparquet
-streamlit-antd-components
+streamlit-antd-components>=0.3.2
 streamlit-aggrid
+
 
