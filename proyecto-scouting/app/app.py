@@ -616,7 +616,7 @@ with tab_ranking:
         mime="text/csv",
         key="rank_dl"
     )
-===================== COMPARADOR (sin pesos) ===========================
+# ====================== COMPARADOR (sin pesos) ===========================
 with tab_compare:
     stop_if_empty(dff_view)
     st.subheader("Comparador de jugadores (Radar)")
@@ -837,6 +837,7 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
 
 
 
