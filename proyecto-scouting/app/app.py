@@ -53,7 +53,7 @@ def _season_key(s: str) -> int:
     except:
         return -1
 
-def round_numeric_for_display(df: pd.DataFrame, ndigits: int = 2) -> pd.DataFrame:
+def round_numeric_for_display(df: pd.DataFrame, ndigits: int = 3) -> pd.DataFrame:
     """Devuelve una copia con columnas numéricas redondeadas (solo para mostrar)."""
     out = df.copy()
     num_cols = out.select_dtypes(include=["number"]).columns
@@ -120,11 +120,9 @@ def label(col: str) -> str:
     return METRIC_LABELS.get(col, col)
 
 def labels_for(cols) -> dict:
-    """Devuelve un dict para plotly.labels con traducciones disponibles."""
     return {c: label(c) for c in cols}
 
 def rename_for_display(df: pd.DataFrame, cols: list) -> pd.DataFrame:
-    """Devuelve un df con columnas renombradas SOLO para mostrar tablas."""
     mapping = {c: label(c) for c in cols if c in df.columns}
     return df[cols].rename(columns=mapping)
 
@@ -133,7 +131,7 @@ params = dict(st.query_params)
 def _to_list(v): return [] if v is None else (v if isinstance(v, list) else [v])
 
 comp_pre   = _to_list(params.get("comp"))
-rol_pre    = _to_list(params.get("rol"))          # Rol_Tactico
+rol_pre    = _to_list(params.get("rol"))
 season_pre = _to_list(params.get("season"))
 min_pre    = int(params.get("min", 900))
 age_from   = int(params.get("age_from", 15))
@@ -146,14 +144,13 @@ comp_opts   = sorted(df["Comp"].dropna().unique())
 rol_opts    = sorted(df["Rol_Tactico"].dropna().unique())
 season_opts = sorted(df["Season"].dropna().unique(), key=_season_key)
 
-# temporada “actual” = la más reciente disponible
 current_season = season_opts[-1] if season_opts else None
 
 comp   = st.sidebar.multiselect("Competición", comp_opts, default=comp_pre)
 rol    = st.sidebar.multiselect("Rol táctico (posición funcional)", rol_opts, default=rol_pre)
 season = st.sidebar.multiselect("Temporada", season_opts, default=season_pre)
 
-# Minutos: mínimo 900 (no se permite bajar de ahí) para vistas generales
+# Minutos: mínimo 900
 global_min = max(900, int(df["Min"].min())) if "Min" in df else 900
 global_max = int(df["Min"].max()) if "Min" in df else 3420
 default_min = int(np.clip(900, global_min, global_max))
@@ -178,26 +175,25 @@ age_max_num = st.sidebar.number_input("Edad máxima", min_value=age_min, max_val
                                       value=int(age_range_slider[1]), step=1, key="age_max_num")
 age_range = (int(min(age_min_num, age_max_num)), int(max(age_min_num, age_max_num)))
 
-# Aplica filtros (comunes)
+# Aplica filtros
 mask_common = True
 if age_num.size: mask_common &= age_num.between(age_range[0], age_range[1])
 if comp:   mask_common &= df["Comp"].isin(comp)
 if rol:    mask_common &= df["Rol_Tactico"].isin(rol)
 if season: mask_common &= df["Season"].isin(season)
-dff_base = df.loc[mask_common].copy()  # se usará para las 2 vistas del OVERVIEW
+dff_base = df.loc[mask_common].copy()
 
-# Con minutos (para el resto de pestañas y para histórico por defecto)
 mask = mask_common & ((df["Min"] >= min_sel) if "Min" in df else True)
 dff = df.loc[mask].copy()
 
-# Escribe estado en URL
+# Guarda estado en URL
 st.query_params.update({
     "comp": comp, "rol": rol, "season": season,
     "min": str(min_sel),
     "age_from": str(age_range[0]), "age_to": str(age_range[1]),
 })
 
-# ===================== Métricas ===================================================
+# ===================== Métricas ==========================
 gk_metrics = ["Save%", "PSxG+/-_per90", "PSxG_per90", "Saves_per90", "CS%", "Launch%"]
 out_metrics = [
     "Gls_per90","xG_per90","NPxG_per90","Sh_per90","SoT_per90","G/SoT_per90",
@@ -207,21 +203,20 @@ out_metrics = [
 ]
 metrics_all = [m for m in out_metrics if m in dff.columns]
 
-# ===================== Tabs ===============================================
+# ===================== Tabs ==============================
 tab_overview, tab_ranking, tab_compare, tab_similarity, tab_shortlist = st.tabs(
     ["📊 Overview", "🏆 Ranking", "🆚 Comparador", "🧬 Similares", "⭐ Shortlist"]
 )
 
-# ===================== Mensaje si no hay jugadores =========================
+# ===================== Mensaje si no hay jugadores =======
 def stop_if_empty(dfx):
     if len(dfx) == 0:
         st.warning("No hay jugadores que cumplan con estas condiciones de filtro. "
                    "Prueba a bajar el umbral de minutos, ampliar las edades o seleccionar más roles/temporadas.")
         st.stop()
 
-# --------- BLOQUE reutilizable: pinta exactamente tus gráficas de Overview ----------
+# --------- BLOQUE reutilizable: Overview ----------
 def render_overview_block(df_in):
-    # KPIs sobre el subconjunto mostrado
     k1, k2, k3, k4 = st.columns(4, gap="large")
     with k1: st.metric("Jugadores (en filtro)", f"{len(df_in):,}")
     with k2: st.metric("Equipos (en filtro)", f"{df_in['Squad'].nunique()}")
@@ -232,7 +227,6 @@ def render_overview_block(df_in):
         med = int(df_in["Min"].median()) if "Min" in df_in and len(df_in) else 0
         st.metric("Minutos medianos (en filtro)", f"{med:,}")
 
-    # ===== Productividad ofensiva =====
     st.markdown("### Productividad ofensiva: **xG/90 vs Goles/90**")
     if all(c in df_in.columns for c in ["xG_per90","Gls_per90"]):
         fig = px.scatter(
@@ -246,7 +240,6 @@ def render_overview_block(df_in):
     else:
         st.info("Faltan columnas xG_per90 / Gls_per90 en el subconjunto actual.")
 
-    # ===== Creación de juego =====
     st.markdown("### Creación: **xA/90 vs Pases clave/90** (tamaño = GCA/90)")
     if all(c in df_in.columns for c in ["xA_per90","KP_per90","GCA90_per90"]):
         fig = px.scatter(
@@ -257,7 +250,6 @@ def render_overview_block(df_in):
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    # ===== Progresión (Top 15) =====
     st.markdown("### Progresión: **Top 15** en Pases progresivos por 90")
     if "PrgP_per90" in df_in.columns:
         top_prog = df_in.sort_values("PrgP_per90", ascending=False).head(15)
@@ -269,7 +261,6 @@ def render_overview_block(df_in):
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    # ===== Defensa =====
     st.markdown("### Defensa: **Tkl+Int/90 vs Recuperaciones/90** (tamaño = Intercepciones/90)")
     if all(c in df_in.columns for c in ["Tkl+Int_per90","Recov_per90","Int_per90"]):
         fig = px.scatter(
@@ -280,7 +271,6 @@ def render_overview_block(df_in):
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    # ===== Pase =====
     st.markdown("### Pase: **Precisión** vs **Volumen**")
     if all(c in df_in.columns for c in ["Cmp%","Cmp_per90"]):
         fig = px.scatter(
@@ -290,7 +280,6 @@ def render_overview_block(df_in):
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    # ===== Porteros (si los hay) =====
     if "Save%" in df_in.columns and "PSxG+/-_per90" in df_in.columns and "Saves_per90" in df_in.columns:
         gk_df = df_in[df_in["Rol_Tactico"].str.contains("GK|Portero", case=False, na=False)].copy()
         if len(gk_df):
@@ -303,28 +292,23 @@ def render_overview_block(df_in):
             )
             st.plotly_chart(fig, use_container_width=True)
 
-# ===================== OVERVIEW ===========================================
+# ===================== OVERVIEW ==========================
 with tab_overview:
-    # 2 sub-pestañas, conservando TUS gráficas
     tab_hist, tab_cur = st.tabs(["📚 Histórico (≥900’)", "⏳ Temporada en curso"])
 
-    # ---------- HISTÓRICO ----------
     with tab_hist:
         selected_seasons = set(season) if season else set(df["Season"].dropna().unique())
         hist_seasons = [s for s in selected_seasons if s != (season_opts[-1] if season_opts else None)]
-
         df_hist = dff_base.copy()
         if hist_seasons:
             df_hist = df_hist[df_hist["Season"].isin(hist_seasons)]
         if "Min" in df_hist.columns:
             df_hist = df_hist[df_hist["Min"] >= 900]
-
         if df_hist.empty:
             st.warning("No hay jugadores históricos con ≥900′ en los filtros seleccionados.")
         else:
             render_overview_block(df_hist)
 
-    # ---------- TEMPORADA EN CURSO ----------
     with tab_cur:
         current_season = season_opts[-1] if season_opts else None
         if current_season is None:
@@ -350,12 +334,11 @@ with tab_overview:
                 else:
                     render_overview_block(df_cur)
 
-# ===================== RANKING ===========================================
+# ===================== RANKING ===========================
 with tab_ranking:
     stop_if_empty(dff)
     st.subheader("Ranking por métrica")
 
-    # Selector con key única para evitar StreamlitDuplicateElementId
     metric_to_rank = st.selectbox(
         "Métrica para ordenar",
         options=metrics_all,
@@ -368,12 +351,10 @@ with tab_ranking:
     cols_show = ["Player", "Squad", "Season", "Rol_Tactico", "Comp", "Min", "Age"] + metrics_all
     tabla = dff[cols_show].sort_values(metric_to_rank, ascending=False).head(topn)
 
-    # --- Redondeo SOLO para mostrar ---
-    tabla_disp_num = round_numeric_for_display(tabla, ndigits=2)
-    # Renombrar SOLO para mostrar
+    # --- Redondeo a 3 decimales SOLO para mostrar ---
+    tabla_disp_num = round_numeric_for_display(tabla, ndigits=3)
     tabla_disp = rename_for_display(tabla_disp_num, cols_show)
 
-    # ---------- AgGrid con columna Jugador anclada a la izquierda ----------
     try:
         from st_aggrid import (
             AgGrid,
@@ -381,28 +362,13 @@ with tab_ranking:
             GridUpdateMode,
             ColumnsAutoSizeMode,
         )
-
         gb = GridOptionsBuilder.from_dataframe(tabla_disp)
-
-        # Opciones por defecto: ordenable, filtrable, redimensionable
-        gb.configure_default_column(
-            sortable=True, filter=True, resizable=True, floatingFilter=True
-        )
-
-        # Fijar columna "Jugador" a la izquierda
+        gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
         gb.configure_column(label("Player"), pinned="left")
-
-        # Paginar para mejorar UX con tablas largas
         gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=25)
-
-        # Barra lateral de columnas/filtros
         gb.configure_side_bar()
-
-        # Scroll interno
         gb.configure_grid_options(domLayout="normal")
-
         grid_options = gb.build()
-
         AgGrid(
             tabla_disp,
             gridOptions=grid_options,
@@ -413,16 +379,11 @@ with tab_ranking:
             height=580,
             allow_unsafe_jscode=False,
         )
-
     except Exception:
-        # Fallback si no está streamlit-aggrid instalado
-        st.info(
-            "Para fijar la columna **Jugador** instala `streamlit-aggrid` en `requirements.txt` "
-            "y vuelve a desplegar. Mostrando la tabla estándar como fallback."
-        )
+        st.info("Para fijar la columna **Jugador** instala `streamlit-aggrid` en `requirements.txt`. Mostrando tabla estándar.")
         st.dataframe(tabla_disp, use_container_width=True)
 
-# ===================== COMPARADOR ========================================
+# ===================== COMPARADOR ========================
 with tab_compare:
     stop_if_empty(dff)
     st.subheader("Comparador de jugadores (Radar)")
@@ -453,7 +414,7 @@ with tab_compare:
     if p1 and p2 and radar_feats:
         st.plotly_chart(radar(dff, p1, p2, radar_feats), use_container_width=True)
 
-# ===================== SIMILARES =========================================
+# ===================== SIMILARES =========================
 with tab_similarity:
     stop_if_empty(dff)
     st.subheader("Jugadores similares (cosine similarity)")
@@ -478,11 +439,11 @@ with tab_similarity:
         out["similarity"] = sims
         out = out.sort_values("similarity", ascending=False).head(25)
 
-        # --- Redondeo para mostrar ---
-        out_disp_num = round_numeric_for_display(out, ndigits=2)
+        # Redondeo a 3 decimales para mostrar
+        out_disp_num = round_numeric_for_display(out, ndigits=3)
         st.dataframe(rename_for_display(out_disp_num, out_cols), use_container_width=True)
 
-# ===================== SHORTLIST =========================================
+# ===================== SHORTLIST =========================
 with tab_shortlist:
     stop_if_empty(dff)
     st.subheader("Shortlist (lista de seguimiento)")
@@ -495,11 +456,10 @@ with tab_shortlist:
 
     base_cols = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]
 
-    # --- Redondeo para mostrar ---
-    sh_disp_num = round_numeric_for_display(sh[base_cols], ndigits=2)
+    # Redondeo a 3 decimales para mostrar/descargar
+    sh_disp_num = round_numeric_for_display(sh[base_cols], ndigits=3)
     st.dataframe(rename_for_display(sh_disp_num, base_cols), use_container_width=True)
 
-    # CSV (si quieres también redondeado, usamos sh_disp_num)
     st.download_button(
         "⬇️ Descargar shortlist (CSV)",
         data=sh_disp_num.to_csv(index=False).encode("utf-8-sig"),
