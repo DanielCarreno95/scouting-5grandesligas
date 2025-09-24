@@ -333,15 +333,13 @@ with tab_ranking:
     stop_if_empty(dff_view)
     st.subheader("Ranking por métrica")
 
-    # -------- Filtro rápido U22/U28 (solo afecta al ranking) ----------
-    col_age_a, col_age_b = st.columns([1.2, 2.8])
-    with col_age_a:
-        quick_age = st.radio(
-            "Filtro edad rápida",
-            ["Todos", "U22 (≤22)", "U28 (≤28)"],
-            horizontal=True,
-            key="quick_age_rank",
-        )
+    # ---------- Filtro rápido U22/U28 (aplica SOLO al ranking) ----------
+    quick_age = st.radio(
+        "Filtro edad rápida",
+        ["Todos", "U22 (≤22)", "U28 (≤28)"],
+        horizontal=True,
+        key="quick_age_rank",
+    )
 
     # Base del ranking
     df_base = dff_view.copy()
@@ -353,44 +351,13 @@ with tab_ranking:
             df_base = df_base[age_num.le(28)]
     stop_if_empty(df_base)
 
-    # -------- Botón: limpiar filtros y recargar ----------
-    def _clear_all_filters():
-        # limpia los principales controles del sidebar y ranking
-        for k in [
-            # sidebar (usaste el label como key implícito)
-            "Jugador", "Equipo", "Competición", "Rol táctico (posición)",
-            "Edad (rango)", "Ámbito temporal", "Temporada (histórico)",
-            "mins_slider_hist_only", "mins_slider_cur_only", "age_slider_only",
-            # ranking
-            "rank_mode", "rank_metric", "rank_order", "rank_topn",
-            "rank_topn_mm", "mm_feats", "mm_preset", "quick_age_rank"
-        ]:
-            st.session_state.pop(k, None)
-        st.query_params.clear()
-        st.rerun()
-
-    with col_age_b:
-        st.button("🧹 Eliminar filtros", use_container_width=True, on_click=_clear_all_filters)
-
-    # -------- Presets por rol (5 métricas clave por posición) ----------
-    # Elegidas para balancear impacto y estabilidad de scouting:
-    ROLE_PRESETS = {
-        "Delantero": [  # goleador/2ª punta
-            "Gls_per90", "xG_per90", "NPxG_per90", "SoT_per90", "xA_per90"
-        ],
-        "Interior": [   # mediocentro ofensivo/interior
-            "xA_per90", "KP_per90", "GCA90_per90", "PrgP_per90", "SCA_per90"
-        ],
-        "Lateral": [    # full-back
-            "PPA_per90", "PrgP_per90", "Carries_per90", "Tkl+Int_per90", "Int_per90"
-        ],
-        "Central": [    # central
-            "Tkl+Int_per90", "Int_per90", "Blocks_per90", "Clr_per90", "Recov_per90"
-        ],
-        "Portero": [    # portero
-            "Save%", "PSxG+/-_per90", "PSxG_per90", "Saves_per90", "CS%"
-        ],
-    }
+    # ---------- Modo de ranking ----------
+    rank_mode = st.radio(
+        "Modo de ordenación",
+        ["Por una métrica", "Multi-métrica (ponderado)"],
+        horizontal=True,
+        key="rank_mode"
+    )
 
     # Métricas disponibles en esta vista (tras filtro rápido)
     out_metrics = [
@@ -404,15 +371,26 @@ with tab_ranking:
     ]
     metrics_all = [m for m in out_metrics if m in df_base.columns]
 
-    # ---------------- Modo de ranking ----------------
-    rank_mode = st.radio(
-        "Modo de ordenación",
-        ["Por una métrica", "Multi-métrica (ponderado)"],
-        horizontal=True,
-        key="rank_mode"
-    )
+    # Presets por rol (5 métricas clave por posición)
+    ROLE_PRESETS = {
+        "Delantero": ["Gls_per90", "xG_per90", "NPxG_per90", "SoT_per90", "xA_per90"],
+        "Interior":  ["xA_per90", "KP_per90", "GCA90_per90", "PrgP_per90", "SCA_per90"],
+        "Lateral":   ["PPA_per90", "PrgP_per90", "Carries_per90", "Tkl+Int_per90", "Int_per90"],
+        "Central":   ["Tkl+Int_per90", "Int_per90", "Blocks_per90", "Clr_per90", "Recov_per90"],
+        "Portero":   ["Save%", "PSxG+/-_per90", "PSxG_per90", "Saves_per90", "CS%"],
+    }
 
-    # ===================== MODO: POR UNA MÉTRICA =====================
+    # Utilidad: banda de edad
+    def _age_band(x):
+        try:
+            a = float(x)
+            if a <= 22: return "U22"
+            if a <= 28: return "U28"
+        except Exception:
+            pass
+        return ""
+
+    # ============== MODO: POR UNA MÉTRICA ==============
     if rank_mode == "Por una métrica":
         metric_to_rank = st.selectbox(
             "Métrica para ordenar",
@@ -421,9 +399,12 @@ with tab_ranking:
             format_func=lambda c: label(c),
             key="rank_metric",
         )
+
         order_dir = st.radio(
-            "Orden", ["Descendente (mejor arriba)", "Ascendente (peor arriba)"],
-            horizontal=True, key="rank_order"
+            "Orden",
+            ["Descendente (mejor arriba)", "Ascendente (peor arriba)"],
+            horizontal=True,
+            key="rank_order"
         )
         ascending = order_dir.startswith("Asc")
 
@@ -432,8 +413,7 @@ with tab_ranking:
             "Top N", 5, max(100, min(1000, len(df_base))), 100, key="rank_topn"
         )
 
-        # Menor es mejor (invirtiendo percentil)
-        LOWER_IS_BETTER = {"Err_per90", "Dis_per90"}  # añade si procede
+        LOWER_IS_BETTER = {"Err_per90", "Dis_per90"}  # añade aquí otras si procede
         lower_better = metric_to_rank in LOWER_IS_BETTER
 
         def pct_series(s: pd.Series, lower_better: bool) -> pd.Series:
@@ -443,19 +423,12 @@ with tab_ranking:
         cols_id = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]
         cols_metrics = [m for m in metrics_all if m in df_base.columns]
         df_full = df_base[cols_id + cols_metrics].copy()
+        df_full["Edad (U22/U28)"] = df_full["Age"].apply(_age_band)
 
-        # Bandas de edad (columna informativa)
-        def age_band(x):
-            try:
-                a = float(x)
-                if a <= 22: return "U22"
-                if a <= 28: return "U28"
-            except Exception:
-                pass
-            return ""
-        df_full["Edad (U22/U28)"] = df_full["Age"].apply(age_band)
+        df_full["Rank"] = df_full[metric_to_rank].rank(
+            ascending=lower_better, method="min"
+        ).astype(int)
 
-        df_full["Rank"] = df_full[metric_to_rank].rank(ascending=lower_better, method="min").astype(int)
         df_full["Pct (muestra)"] = (pct_series(df_full[metric_to_rank], lower_better) * 100).round(1)
         if "Rol_Tactico" in df_full.columns:
             df_full["Pct (por rol)"] = df_full.groupby("Rol_Tactico")[metric_to_rank] \
@@ -473,7 +446,7 @@ with tab_ranking:
 
         st.caption("📌 Percentiles calculados sobre la **muestra filtrada** (incluye filtro rápido U22/U28).")
 
-    # ===================== MODO: MULTI-MÉTRICA =====================
+    # ============== MODO: MULTI-MÉTRICA ==============
     else:
         st.caption(
             '<div class="note">Se muestran dos índices: '
@@ -482,20 +455,17 @@ with tab_ranking:
             unsafe_allow_html=True
         )
 
-        # Preset por rol (lista mejorada, 5 métricas)
-        col_p1, col_p2 = st.columns([1.2, 2])
-        with col_p1:
-            preset_sel = st.selectbox(
-                "Preset por rol (opcional)",
-                ["— (personalizado)"] + list(ROLE_PRESETS.keys()),
-                index=0, key="mm_preset"
-            )
-        with col_p2:
-            if preset_sel != "— (personalizado)":
-                if st.button("Aplicar preset", type="secondary"):
-                    preset_feats = [m for m in ROLE_PRESETS[preset_sel] if m in metrics_all]
-                    st.session_state["mm_feats"] = preset_feats
-                    st.success(f"Preset aplicado: {preset_sel} → {len(preset_feats)} métricas.")
+        # Preset por rol (opcional)
+        preset_sel = st.selectbox(
+            "Preset por rol (opcional)",
+            ["— (personalizado)"] + list(ROLE_PRESETS.keys()),
+            index=0, key="mm_preset"
+        )
+        if preset_sel != "— (personalizado)":
+            if st.button("Aplicar preset"):
+                preset_feats = [m for m in ROLE_PRESETS[preset_sel] if m in metrics_all]
+                st.session_state["mm_feats"] = preset_feats
+                st.success(f"Preset aplicado: {preset_sel} → {len(preset_feats)} métricas.")
 
         # 1) Selección de métricas
         mm_feats = st.multiselect(
@@ -531,18 +501,7 @@ with tab_ranking:
         idx_final_metrica = (X.values @ w_vec)
 
         df_rank = df_base[["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]].copy()
-
-        # Columna informativa de edad
-        def age_band(x):
-            try:
-                a = float(x)
-                if a <= 22: return "U22"
-                if a <= 28: return "U28"
-            except Exception:
-                pass
-            return ""
-        df_rank["Edad (U22/U28)"] = df_rank["Age"].apply(age_band)
-
+        df_rank["Edad (U22/U28)"] = df_rank["Age"].apply(_age_band)
         for f in mm_feats:
             df_rank[f] = df_base[f].astype(float)
         df_rank["Índice ponderado"] = idx_norm_0_100
@@ -559,7 +518,26 @@ with tab_ranking:
                      "Índice ponderado", "Índice Final Métrica"] + mm_feats
         tabla_disp = rename_for_display(tabla_disp_num, cols_show)
 
-    # -------- Render (AgGrid con heatmap) --------
+    # ---------- Botón ELIMINAR FILTROS (al final de los filtros) ----------
+    st.markdown("<hr style='opacity:0.15;'>", unsafe_allow_html=True)
+    clear_pressed = st.button("🧹 Eliminar filtros", use_container_width=True)
+    if clear_pressed:
+        # limpia los principales controles del sidebar y ranking
+        for k in [
+            # sidebar (keys por defecto suelen ser etiquetas)
+            "Jugador", "Equipo", "Competición", "Rol táctico (posición)",
+            "Edad (rango)", "Ámbito temporal", "Temporada (histórico)",
+            "mins_slider_hist_only", "mins_slider_cur_only", "age_slider_only",
+            # ranking
+            "rank_mode", "rank_metric", "rank_order", "rank_topn",
+            "rank_topn_mm", "mm_feats", "mm_preset", "quick_age_rank",
+            "rank_show_all"
+        ]:
+            st.session_state.pop(k, None)
+        st.query_params.clear()
+        st.rerun()
+
+    # ---------- Render tabla (AgGrid con heatmap) ----------
     try:
         from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode, JsCode
 
@@ -616,6 +594,7 @@ with tab_ranking:
         mime="text/csv",
         key="rank_dl"
     )
+
 # ====================== COMPARADOR (sin pesos) ===========================
 with tab_compare:
     stop_if_empty(dff_view)
@@ -837,6 +816,7 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
 
 
 
