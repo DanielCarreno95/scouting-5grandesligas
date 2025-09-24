@@ -390,10 +390,14 @@ with tab_ranking:
 
 # ===================== COMPARADOR ========================================
 with tab_compare:
-    stop_if_empty(dff)
+    # --- seguridad: si el df filtrado está vacío, aviso y paro esta pestaña ---
+    if len(dff) == 0:
+        st.warning("No hay jugadores con los filtros actuales. Ajusta los filtros para comparar.")
+        st.stop()
+
     st.subheader("Comparador de jugadores (Radar)")
 
-    # ---------- plantillas de métricas (puedes afinarlas cuando quieras) ----------
+    # ---------- plantillas ----------
     TEMPLATES = {
         "⚽ Finalizador": ["Gls_per90", "xG_per90", "SoT_per90", "G/SoT_per90", "xA_per90", "KP_per90"],
         "🎯 Creador": ["xA_per90", "KP_per90", "GCA90_per90", "SCA_per90", "PrgP_per90", "Cmp%"],
@@ -402,16 +406,25 @@ with tab_compare:
         "🚀 Lateral": ["PrgC_per90", "PrgP_per90", "PPA_per90", "SCA_per90", "Tkl+Int_per90", "Recov_per90"],
         "🧤 Portero": ["Save%", "PSxG+/-_per90", "Saves_per90", "Launch%", "PSxG_per90", "CS%"],
     }
-    # filtra solo métricas existentes en tu dataset actual
+    # deja solo las métricas que existan en el dataset actual
     TEMPLATES = {k: [m for m in v if m in metrics_all] for k, v in TEMPLATES.items()}
 
-    # ---------- selección de jugadores ----------
-    players = dff["Player"].dropna().unique().tolist()
-    cA, cB = st.columns(2)
-    p1 = cA.selectbox("Jugador A", players, index=0 if players else None, key="pA")
-    p2 = cB.selectbox("Jugador B", players, index=1 if len(players)>1 else 0, key="pB")
+    # ---------- selección de jugadores: hasta 3 ----------
+    players_all = dff["Player"].dropna().unique().tolist()
+    sel_players = st.multiselect(
+        "Jugadores (máx. 3)",
+        players_all,
+        default=players_all[:2] if len(players_all) >= 2 else players_all[:1],
+        key="cmp_players"
+    )
+    if len(sel_players) == 0:
+        st.info("Selecciona al menos 1 jugador.")
+        st.stop()
+    if len(sel_players) > 3:
+        st.info("Has seleccionado más de 3 jugadores. Se tomarán los 3 primeros.")
+        sel_players = sel_players[:3]
 
-    # ---------- modo de contexto para percentiles y baseline ----------
+    # ---------- contexto para percentiles/baseline ----------
     st.markdown("**Contexto de comparación**")
     col_ctx1, col_ctx2, col_ctx3 = st.columns([1,1,1.5])
     ctx_mode = col_ctx1.selectbox(
@@ -424,7 +437,7 @@ with tab_compare:
     show_baseline = col_ctx2.toggle("Mostrar baseline del grupo", value=True, key="cmp_baseline")
     use_percentiles = col_ctx3.toggle("Tooltip con percentiles", value=True, key="cmp_pct_tooltip")
 
-    # ---------- plantilla de métricas ----------
+    # ---------- plantillas y selección de métricas ----------
     col_tpl, col_ms = st.columns([1,3])
     tpl_name = col_tpl.selectbox("Plantillas de métricas", options=list(TEMPLATES.keys())+["(Personalizado)"], index=0, key="tpl")
     default_feats = TEMPLATES.get(tpl_name, metrics_all[:6])
@@ -432,148 +445,160 @@ with tab_compare:
     radar_feats = col_ms.multiselect(
         "Métricas para el radar (elige 4–10)",
         options=metrics_all,
-        default=default_feats[: min(10, len(default_feats))],
+        default=default_feats[: min(10, len(default_feats))] if default_feats else metrics_all[:6],
         key="feats",
         format_func=lambda c: label(c)
     )
+    if len(radar_feats) < 4:
+        st.info("Selecciona al menos 4 métricas para el radar.")
+        st.stop()
 
-    # ---------- pesos (para adaptar al modelo de juego) ----------
+    # ---------- pesos ----------
     weights = {f: 1.0 for f in radar_feats}
     with st.expander("⚖️ Ajustar pesos por métrica (0.5 — 2.0)", expanded=False):
         for f in radar_feats:
             weights[f] = st.slider(label(f), 0.5, 2.0, 1.0, 0.1, key=f"w_{f}")
 
-    # ========== helpers locales ==========
-    def _ctx_mask(df_in):
-        """Devuelve la máscara de grupo según ctx_mode para baseline/percentiles."""
-        if ctx_mode == "Por rol táctico" and p1:
-            rol_ref = dff.loc[dff["Player"] == p1, "Rol_Tactico"].iloc[0] if "Rol_Tactico" in dff else None
-            return (df_in["Rol_Tactico"] == rol_ref) if rol_ref is not None else pd.Series(True, index=df_in.index)
-        if ctx_mode == "Por competición" and p1:
-            comp_ref = dff.loc[dff["Player"] == p1, "Comp"].iloc[0] if "Comp" in dff else None
-            return (df_in["Comp"] == comp_ref) if comp_ref is not None else pd.Series(True, index=df_in.index)
-        return pd.Series(True, index=df_in.index)
-
+    # ---------- helpers ----------
     def _normalize_0_1(df_num: pd.DataFrame) -> pd.DataFrame:
         mn = df_num.min(axis=0); mx = df_num.max(axis=0)
         return (df_num - mn) / (mx - mn + 1e-9)
 
     def _percentiles(df_grp: pd.DataFrame, feats: list) -> pd.DataFrame:
-        # percentil simple por columna (0–1) dentro del grupo
-        pct = df_grp[feats].rank(pct=True)
-        return pct
+        return df_grp[feats].rank(pct=True)
 
-    # ========== datos de los jugadores seleccionados ==========
-    if not p1 or not p2 or len(radar_feats) < 4:
-        st.info("Selecciona dos jugadores y al menos 4 métricas para mostrar el radar.")
-        st.stop()
+    def _ctx_mask(df_in: pd.DataFrame) -> pd.Series:
+        if ctx_mode == "Muestra filtrada":
+            return pd.Series(True, index=df_in.index)
+        # Referencia: primer jugador seleccionado
+        ref = sel_players[0]
+        if ctx_mode == "Por rol táctico" and "Rol_Tactico" in df_in:
+            rol_ref = dff.loc[dff["Player"] == ref, "Rol_Tactico"].iloc[0] if any(dff["Player"] == ref) else None
+            return (df_in["Rol_Tactico"] == rol_ref) if rol_ref is not None else pd.Series(True, index=df_in.index)
+        if ctx_mode == "Por competición" and "Comp" in df_in:
+            comp_ref = dff.loc[dff["Player"] == ref, "Comp"].iloc[0] if any(dff["Player"] == ref) else None
+            return (df_in["Comp"] == comp_ref) if comp_ref is not None else pd.Series(True, index=df_in.index)
+        return pd.Series(True, index=df_in.index)
 
+    # ---------- grupo de contexto ----------
     df_group = dff[_ctx_mask(dff)].copy()
     if df_group.empty:
-        st.warning("El grupo de contexto para percentiles/baseline está vacío con los filtros actuales.")
+        st.warning("No hay jugadores en el grupo de contexto con los filtros actuales.")
         df_group = dff.copy()
 
-    # normalización 0–1 + pesos para el radar
-    S = df_group[radar_feats].astype(float)
-    for f in radar_feats:  # aplica pesos
+    # normalización (aplicando pesos)
+    S = df_group[radar_feats].astype(float).copy()
+    for f in radar_feats:
         S[f] = S[f] * weights[f]
     S_norm = _normalize_0_1(S)
-
-    # medias del grupo (baseline)
     baseline = S_norm.mean(axis=0)
 
-    # vectores A/B (promedio por si aparecen varias filas del mismo jugador)
-    A = S_norm[df_group["Player"] == p1].mean(numeric_only=True).fillna(0)
-    B = S_norm[df_group["Player"] == p2].mean(numeric_only=True).fillna(0)
-
-    # percentiles para tooltip (sin pesos, sobre valores brutos por claridad)
+    # percentiles (sobre crudo)
     pct = _percentiles(df_group, radar_feats) if use_percentiles else None
-    pctA = pct[df_group["Player"] == p1].mean(numeric_only=True) if pct is not None else None
-    pctB = pct[df_group["Player"] == p2].mean(numeric_only=True) if pct is not None else None
 
-    # ========== radar ==========
+    # ---------- RADAR ----------
     theta_labels = [label(f) for f in radar_feats]
     fig = go.Figure()
-    # jugadores
-    fig.add_trace(go.Scatterpolar(
-        r=A[radar_feats].values, theta=theta_labels, fill="toself", name=p1,
-        hovertemplate="<b>%{theta}</b><br>Index 0–1: %{r:.3f}"
-                      + ( "<br>Percentil: %{customdata:.0%}" if use_percentiles and pctA is not None else "" )
-                      + "<extra></extra>",
-        customdata=(pctA[radar_feats].values if use_percentiles and pctA is not None else None),
-    ))
-    fig.add_trace(go.Scatterpolar(
-        r=B[radar_feats].values, theta=theta_labels, fill="toself", name=p2,
-        hovertemplate="<b>%{theta}</b><br>Index 0–1: %{r:.3f}"
-                      + ( "<br>Percentil: %{customdata:.0%}" if use_percentiles and pctB is not None else "" )
-                      + "<extra></extra>",
-        customdata=(pctB[radar_feats].values if use_percentiles and pctB is not None else None),
-    ))
-    # baseline
+
+    # paleta de colores para hasta 3 jugadores
+    palette = [
+        "#4F8BF9",  # azul
+        "#F95F53",  # coral
+        "#2BB673",  # verde
+    ]
+
+    for i, pl in enumerate(sel_players):
+        # promedio por si hay varias filas del jugador
+        vec = S_norm[df_group["Player"] == pl].mean(numeric_only=True).fillna(0)
+        # percentiles para tooltip
+        pct_pl = None
+        if pct is not None:
+            pct_pl = pct[df_group["Player"] == pl].mean(numeric_only=True)
+
+        fig.add_trace(go.Scatterpolar(
+            r=vec[radar_feats].values,
+            theta=theta_labels,
+            fill="toself",
+            name=pl,
+            line=dict(color=palette[i % len(palette)]),
+            hovertemplate="<b>%{theta}</b><br>Index 0–1: %{r:.3f}"
+                          + ("<br>Percentil: %{customdata:.0%}" if (pct_pl is not None) else "")
+                          + "<extra></extra>",
+            customdata=(pct_pl[radar_feats].values if pct_pl is not None else None),
+        ))
+
     if show_baseline:
         fig.add_trace(go.Scatterpolar(
-            r=baseline[radar_feats].values, theta=theta_labels, name="Baseline grupo",
-            line=dict(dash="dash"), fill=None, hovertemplate="<b>%{theta}</b><br>Baseline: %{r:.3f}<extra></extra>"
+            r=baseline[radar_feats].values,
+            theta=theta_labels,
+            name="Baseline grupo",
+            line=dict(dash="dash", color="#BBBBBB"),
+            fill=None,
+            hovertemplate="<b>%{theta}</b><br>Baseline: %{r:.3f}<extra></extra>"
         ))
+
     fig.update_layout(
         polar=dict(radialaxis=dict(visible=True, range=[0,1])),
         showlegend=True, margin=dict(l=30, r=30, t=10, b=10)
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # ========== tabla comparativa con deltas ==========
-    # valores crudos (sin normalizar) para lectura humana
+    # ---------- TABLA COMPARATIVA (crudo) ----------
     raw_group = dff[_ctx_mask(dff)].copy()
-    A_raw = raw_group[raw_group["Player"] == p1][radar_feats].astype(float).mean(numeric_only=True)
-    B_raw = raw_group[raw_group["Player"] == p2][radar_feats].astype(float).mean(numeric_only=True)
+    rows = []
+    for pl in sel_players:
+        vals = raw_group[raw_group["Player"] == pl][radar_feats].astype(float).mean(numeric_only=True)
+        rows.append(vals)
 
-    df_cmp = pd.DataFrame({
-        "Métrica": [label(f) for f in radar_feats],
-        p1: A_raw.values,
-        p2: B_raw.values,
-        "Δ (A - B)": (A_raw - B_raw).values
-    })
-    # percentiles crudos
+    df_cmp = pd.DataFrame({"Métrica": [label(f) for f in radar_feats]})
+    for pl, vals in zip(sel_players, rows):
+        df_cmp[pl] = vals.values
+
+    # Δ (A - B) si hay al menos 2 jugadores
+    if len(sel_players) >= 2:
+        df_cmp[f"Δ ({sel_players[0]} - {sel_players[1]})"] = (rows[0] - rows[1]).values
+
+    # percentiles crudos por jugador (opcional)
     if use_percentiles:
         pct_raw = _percentiles(raw_group, radar_feats)
-        pctA_raw = pct_raw[raw_group["Player"] == p1].mean(numeric_only=True)
-        pctB_raw = pct_raw[raw_group["Player"] == p2].mean(numeric_only=True)
-        df_cmp["% "+p1] = (pctA_raw.values * 100)
-        df_cmp["% "+p2] = (pctB_raw.values * 100)
+        for pl in sel_players:
+            pr = pct_raw[raw_group["Player"] == pl].mean(numeric_only=True)
+            df_cmp[f"% {pl}"] = (pr.values * 100)
 
-    # ordena por diferencia absoluta
-    df_cmp = df_cmp.reindex(df_cmp["Δ (A - B)"].abs().sort_values(ascending=False).index)
-
-    # redondeo a 3 decimales (tu preferencia actual)
+    # redondeo 3 decimales y orden por gap si existe Δ
     num_cols = [c for c in df_cmp.columns if c != "Métrica"]
     df_cmp[num_cols] = df_cmp[num_cols].astype(float).round(3)
+    delta_cols = [c for c in df_cmp.columns if c.startswith("Δ (")]
+    if delta_cols:
+        df_cmp = df_cmp.reindex(df_cmp[delta_cols[0]].abs().sort_values(ascending=False).index)
 
-    st.markdown("**Diferencias por métrica** (ordenadas por gap absoluto)")
+    st.markdown("**Diferencias por métrica**")
     st.dataframe(df_cmp, use_container_width=True)
 
-    # ========== export ==========
-    colx1, colx2 = st.columns(2)
-    with colx1:
+    # ---------- export ----------
+    c1, c2 = st.columns(2)
+    with c1:
         st.download_button(
             "⬇️ Descargar comparación (CSV)",
             data=df_cmp.to_csv(index=False).encode("utf-8-sig"),
-            file_name=f"comparacion_{p1}_vs_{p2}.csv",
+            file_name=f"comparacion_{'_vs_'.join(sel_players)}.csv",
             mime="text/csv",
             key="cmp_csv_dl"
         )
-    with colx2:
+    with c2:
         try:
             import io
-            png_bytes = fig.to_image(format="png", scale=2)  # requiere 'kaleido' en requirements
+            png_bytes = fig.to_image(format="png", scale=2)  # requiere 'kaleido' en requirements.txt
             st.download_button(
                 "🖼️ Descargar radar (PNG)",
                 data=png_bytes,
-                file_name=f"radar_{p1}_vs_{p2}.png",
+                file_name=f"radar_{'_vs_'.join(sel_players)}.png",
                 mime="image/png",
                 key="cmp_png_dl"
             )
         except Exception:
             st.caption("ℹ️ Para exportar PNG instala **kaleido** en `requirements.txt`.")
+
 
 
 # ===================== SIMILARES =========================
@@ -634,4 +659,5 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
 
