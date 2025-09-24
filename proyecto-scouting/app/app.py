@@ -341,76 +341,84 @@ with tab_ranking:
         key="rank_mode"
     )
 
+    # ===================== MODO: POR UNA MÉTRICA =====================
     if rank_mode == "Por una métrica":
-    # --- Controles ---
-    metric_to_rank = st.selectbox(
-        "Métrica para ordenar",
-        options=metrics_all,
-        index=0 if metrics_all else None,
-        format_func=lambda c: label(c),
-        key="rank_metric",
-    )
+        # --- Controles de orden y tamaño de vista ---
+        metric_to_rank = st.selectbox(
+            "Métrica para ordenar",
+            options=metrics_all,
+            index=0 if metrics_all else None,
+            format_func=lambda c: label(c),
+            key="rank_metric",
+        )
 
-    order_dir = st.radio(
-        "Orden", ["Descendente (mejor arriba)", "Ascendente (peor arriba)"],
-        horizontal=True, key="rank_order"
-    )
-    ascending = order_dir.startswith("Asc")
+        order_dir = st.radio(
+            "Orden", ["Descendente (mejor arriba)", "Ascendente (peor arriba)"],
+            horizontal=True, key="rank_order"
+        )
+        ascending = order_dir.startswith("Asc")
 
-    show_all = st.checkbox("Mostrar todos", value=False, key="rank_show_all")
-    if show_all:
-        topn = len(dff_view)
+        show_all = st.checkbox("Mostrar todos", value=False, key="rank_show_all")
+        if show_all:
+            topn = len(dff_view)
+        else:
+            topn = st.slider("Top N", 5, max(100, min(1000, len(dff_view))), 100, key="rank_topn")
+
+        # --- Métricas donde 'menos es mejor' (invertir percentil) ---
+        LOWER_IS_BETTER = {"Err_per90", "Dis_per90"}  # añade otras si procede
+        lower_better = metric_to_rank in LOWER_IS_BETTER
+
+        def pct_series(s: pd.Series, lower_better: bool) -> pd.Series:
+            """Percentil 0–1; si lower_better, invierte para que mayor=mejor."""
+            p = s.rank(pct=True)
+            return (1 - p) if lower_better else p
+
+        # --- Base = muestra total filtrada ---
+        cols_id = ["Player", "Squad", "Season", "Rol_Tactico", "Comp", "Min", "Age"]
+        cols_metrics = [m for m in metrics_all if m in dff_view.columns]
+        df_full = dff_view[cols_id + cols_metrics].copy()
+
+        # Rank (1 = mejor) calculado en el universo filtrado
+        # Si 'lower is better', el menor valor recibe Rank=1
+        df_full["Rank"] = df_full[metric_to_rank].rank(
+            ascending=lower_better, method="min"
+        ).astype(int)
+
+        # Percentiles (universo = dff_view)
+        df_full["Pct (muestra)"] = (pct_series(df_full[metric_to_rank], lower_better) * 100).round(1)
+
+        if "Rol_Tactico" in df_full.columns:
+            df_full["Pct (por rol)"] = df_full.groupby("Rol_Tactico")[metric_to_rank] \
+                .transform(lambda s: (pct_series(s, lower_better) * 100)).round(1)
+
+        if "Comp" in df_full.columns:
+            df_full["Pct (por comp)"] = df_full.groupby("Comp")[metric_to_rank] \
+                .transform(lambda s: (pct_series(s, lower_better) * 100)).round(1)
+
+        # Vista ordenada + corte TopN (no afecta a cómo se calculan percentiles)
+        df_view = df_full.sort_values(metric_to_rank, ascending=ascending).head(topn).copy()
+
+        # Columnas a mostrar
+        cols_ctx = [c for c in ["Rank", "Pct (muestra)", "Pct (por rol)", "Pct (por comp)"] if c in df_view.columns]
+        cols_show = cols_id + cols_ctx + cols_metrics
+
+        # Redondeo + renombre para UI
+        tabla_disp_num = round_numeric_for_display(df_view, ndigits=3)
+        tabla_disp = rename_for_display(tabla_disp_num, cols_show)
+
+        st.caption(
+            "📌 **Percentiles** calculados sobre la **muestra total filtrada**. "
+            "Cambiar competición/temporada/rol/edad/minutos actualiza el universo y los percentiles."
+        )
+
+    # ===================== MODO: MULTI-MÉTRICA =====================
     else:
-        topn = st.slider("Top N", 5, max(100, min(1000, len(dff_view))), 100, key="rank_topn")
+        st.caption(
+            '<div class="note">El índice ponderado normaliza cada métrica (0–1), '
+            'aplica tu peso y combina. 100 = mejor del grupo.</div>',
+            unsafe_allow_html=True
+        )
 
-    # --- Métricas en las que 'menos es mejor' (invertir percentil) ---
-    LOWER_IS_BETTER = {"Err_per90", "Dis_per90"}  # añade más si procede
-    lower_better = metric_to_rank in LOWER_IS_BETTER
-
-    def pct_series(s: pd.Series, lower_better: bool) -> pd.Series:
-        """Percentil 0–1; si lower_better, invierte para que mayor = mejor."""
-        p = s.rank(pct=True)
-        return (1 - p) if lower_better else p
-
-    # --- Base completa = muestra total filtrada ---
-    cols_id = ["Player", "Squad", "Season", "Rol_Tactico", "Comp", "Min", "Age"]
-    cols_metrics = [m for m in metrics_all if m in dff_view.columns]
-    df_full = dff_view[cols_id + cols_metrics].copy()
-
-    # Rank (1 = mejor) calculado en la muestra total filtrada
-    # Si 'lower is better', el menor valor recibe Rank=1
-    df_full["Rank"] = df_full[metric_to_rank].rank(
-        ascending=lower_better, method="min"
-    ).astype(int)
-
-    # Percentiles calculados en la muestra total filtrada (y se reflejan al filtrar)
-    df_full["Pct (muestra)"] = (pct_series(df_full[metric_to_rank], lower_better) * 100).round(1)
-
-    if "Rol_Tactico" in df_full.columns:
-        df_full["Pct (por rol)"] = df_full.groupby("Rol_Tactico")[metric_to_rank] \
-            .transform(lambda s: (pct_series(s, lower_better) * 100)).round(1)
-
-    if "Comp" in df_full.columns:
-        df_full["Pct (por comp)"] = df_full.groupby("Comp")[metric_to_rank] \
-            .transform(lambda s: (pct_series(s, lower_better) * 100)).round(1)
-
-    # Orden para mostrar y corte TopN (esto no afecta al cálculo de percentiles)
-    df_view = df_full.sort_values(metric_to_rank, ascending=ascending).head(topn).copy()
-
-    # Orden final de columnas
-    cols_ctx = [c for c in ["Rank", "Pct (muestra)", "Pct (por rol)", "Pct (por comp)"] if c in df_view.columns]
-    cols_show = cols_id + cols_ctx + cols_metrics
-
-    # Redondeo + renombre para mostrar
-    tabla_disp_num = round_numeric_for_display(df_view, ndigits=3)
-    tabla_disp = rename_for_display(tabla_disp_num, cols_show)
-
-    st.caption(
-        "📌 **Percentiles** calculados sobre la **muestra total filtrada** (dff_view). "
-        "Si cambias competición, temporada, rol, edad o minutos, los percentiles cambian "
-        "coherentemente con el nuevo universo."
-    )
-        # 1) Selección de métricas
         mm_feats = st.multiselect(
             "Elige 3–12 métricas para construir el índice",
             options=metrics_all,
@@ -422,13 +430,13 @@ with tab_ranking:
             st.info("Selecciona al menos 3 métricas.")
             st.stop()
 
-        # 2) Pesos por métrica
+        # Pesos
         weights = {}
         with st.expander("⚖️ Pesos por métrica (0.5–3.0)", expanded=True):
             for f in mm_feats:
                 weights[f] = st.slider(label(f), 0.5, 3.0, 1.0, 0.1, key=f"rankw_{f}")
 
-        # 3) Índice ponderado
+        # Índice ponderado
         X = dff_view[mm_feats].astype(float).copy()
         for c in mm_feats:
             X[c] = X[c].fillna(X[c].median())
@@ -437,7 +445,7 @@ with tab_ranking:
         import numpy as _np
         w = _np.array([weights[f] for f in mm_feats], dtype=float)
         w = w / (w.sum() + 1e-9)
-        score = (Xn.values @ w) * 100.0  # 0–100
+        score = (Xn.values @ w) * 100.0
 
         df_rank = dff_view[["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]].copy()
         for f in mm_feats:
@@ -447,7 +455,6 @@ with tab_ranking:
         topn = st.slider("Top N", 5, 200, 50, key="rank_topn_mm")
         df_rank = df_rank.sort_values("Índice ponderado", ascending=False).head(topn)
 
-        # Redondeo y renombre
         tabla_disp_num = round_numeric_for_display(df_rank, ndigits=3)
         tabla_disp_num["Índice ponderado"] = pd.to_numeric(
             tabla_disp_num["Índice ponderado"], errors="coerce"
@@ -460,11 +467,9 @@ with tab_ranking:
         from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode
 
         gb = GridOptionsBuilder.from_dataframe(tabla_disp)
-        gb.configure_default_column(
-            sortable=True, filter=True, resizable=True, floatingFilter=True,
-        )
+        gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
 
-        # 👉 Columnas clave con ancho mínimo, texto envuelto y tooltip
+        # Columnas clave legibles
         gb.configure_column(label("Player"),  pinned="left", minWidth=260, wrapText=True, autoHeight=True,
                             tooltipField=label("Player"))
         gb.configure_column(label("Squad"),   minWidth=180, wrapText=True, autoHeight=True,
@@ -473,7 +478,6 @@ with tab_ranking:
         gb.configure_column(label("Rol_Tactico"), header_name=label("Rol_Tactico"),
                             minWidth=170, wrapText=True, autoHeight=True, tooltipField=label("Rol_Tactico"))
 
-        # Si existe la columna de índice ponderado, fija un ancho
         if rank_mode != "Por una métrica":
             gb.configure_column("Índice ponderado", minWidth=140)
 
@@ -492,14 +496,17 @@ with tab_ranking:
             gridOptions=grid_options,
             theme="streamlit",
             update_mode=GridUpdateMode.NO_UPDATE,
-            # Auto-ajuste de columnas al contenido (el resto de columnas)
             columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
             fit_columns_on_grid_load=False,
             height=580,
             allow_unsafe_jscode=False,
         )
     except Exception:
-        st.dataframe(tabla_disp, use_container_width=True, hide_index=True)
+        # Fallback simple
+        try:
+            st.dataframe(tabla_disp, use_container_width=True, hide_index=True)
+        except TypeError:
+            st.dataframe(tabla_disp, use_container_width=True)
 
     st.download_button(
         "⬇️ Descargar ranking (CSV)",
@@ -508,7 +515,6 @@ with tab_ranking:
         mime="text/csv",
         key="rank_dl"
     )
-
 # ===================== COMPARADOR (sin pesos) ===========================
 with tab_compare:
     stop_if_empty(dff_view)
@@ -730,5 +736,6 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
 
 
