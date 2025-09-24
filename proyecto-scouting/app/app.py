@@ -150,72 +150,127 @@ min_pre    = int(params.get("min", 900))
 age_from   = int(params.get("age_from", 15))
 age_to     = int(params.get("age_to", 40))
 
-# ===================== Filtros (orden solicitado) ========
-st.sidebar.markdown('<div class="sidebar-title">Filtros</div>', unsafe_allow_html=True)
+# ===================== Filtros ===========================
+st.sidebar.header("Filtros")
 
-# --- 1) Jugador (con buscador explícito) ---
+# Ajuste visual de tipografía en la barra lateral
+st.markdown("""
+<style>
+div[data-testid="stSidebar"] label {font-size:.94rem; font-weight:600;}
+div[data-testid="stSidebar"] .stMultiSelect, 
+div[data-testid="stSidebar"] .stSelectbox, 
+div[data-testid="stSidebar"] .stNumberInput, 
+div[data-testid="stSidebar"] .stSlider {font-size:.92rem;}
+</style>
+""", unsafe_allow_html=True)
+
+# --- Opciones base (orden alfabético) ---
 player_all = sorted(df["Player"].dropna().unique())
-q_player = st.sidebar.text_input("Buscar jugador", placeholder="Escribe un nombre…", key="q_player")
-player_opts = [p for p in player_all if q_player.lower() in p.lower()] if q_player else player_all
-players_sel = st.sidebar.multiselect("Jugador", player_opts, placeholder="Selecciona jugador(es)…", key="players_sel")
+squad_all  = sorted(df["Squad"].dropna().unique())
+comp_all   = sorted(df["Comp"].dropna().unique())
+rol_opts   = sorted(df["Rol_Tactico"].dropna().unique())
 
-# --- 2) Equipo (con buscador explícito) ---
-squad_all = sorted(df["Squad"].dropna().unique())
-q_squad = st.sidebar.text_input("Buscar equipo", placeholder="Escribe un equipo…", key="q_squad")
-squad_opts = [s for s in squad_all if q_squad.lower() in s.lower()] if q_squad else squad_all
-squads_sel = st.sidebar.multiselect("Equipo", squad_opts, placeholder="Selecciona equipo(s)…", key="squads_sel")
+# Temporadas ordenadas por _season_key (ya definido arriba)
+season_opts = sorted(df["Season"].dropna().unique(), key=_season_key)
+current_season = season_opts[-1] if season_opts else None
 
-# --- 3) Competición (con buscador explícito) ---
-comp_all = sorted(df["Comp"].dropna().unique())
-q_comp = st.sidebar.text_input("Buscar competición", placeholder="Escribe una competición…", key="q_comp")
-comp_opts = [c for c in comp_all if q_comp.lower() in c.lower()] if q_comp else comp_all
-# mantiene los defaults que venían de la URL si existen
-comp_default = [c for c in comp_pre if c in comp_opts] if 'comp_pre' in locals() else None
-comp = st.sidebar.multiselect("Competición", comp_opts, default=comp_default, placeholder="Selecciona competición(es)…", key="comp_sel")
+# ---------- 1) Jugador (con buscador dentro del desplegable)
+players_sel = multi_with_search("Jugador", player_all, key="filter_players")
 
-# --- 4) Temporada (con ámbito histórico / actual) ---
-season_opts_all = sorted(df["Season"].dropna().unique(), key=_season_key)
-current_season = season_opts_all[-1] if season_opts_all else None
-scope = st.sidebar.radio("Temporada", ["Histórico (≥900′)", "Temporada en curso"], index=0)
+# ---------- 2) Equipo (con buscador dentro del desplegable)
+squads_sel = multi_with_search("Equipo", squad_all, key="filter_squads")
 
-if scope == "Histórico (≥900′)":
-    default_hist = [s for s in season_opts_all if s != current_season] or season_opts_all
-    season = st.sidebar.multiselect("Selecciona temporada(s)", season_opts_all, default=default_hist, key="season_hist")
-else:
-    season = [current_season] if current_season else []
-    st.sidebar.caption(f"Temporada actual: **{current_season or '—'}**")
+# ---------- 3) Competición (con buscador dentro del desplegable)
+comp = multi_with_search(
+    "Competición",
+    comp_all,
+    default=[c for c in comp_pre if c in comp_all] if 'comp_pre' in locals() else None,
+    key="filter_comp"
+)
 
-# --- 5) Rol táctico ---
-rol_opts  = sorted(df["Rol_Tactico"].dropna().unique())
-rol  = st.sidebar.multiselect("Rol táctico (posición)", rol_opts, default=rol_pre if 'rol_pre' in locals() else None, key="rol_sel")
+# ---------- 4) Temporada (multiselección; el histórico/actual lo resuelves en Overview)
+season = st.sidebar.multiselect(
+    "Temporada",
+    season_opts,
+    default=season_pre if season_pre else season_opts,  # si no llega query param, todas
+    key="filter_season"
+)
 
-# --- 6) Edad (rango) ---
+# ---------- 5) Rol táctico (posición funcional)
+rol = st.sidebar.multiselect(
+    "Rol táctico (posición)",
+    rol_opts,
+    default=rol_pre if rol_pre else [],
+    key="filter_rol"
+)
+
+# ---------- 6) Edad (rango) + inputs mínimos/máximos para precisión
 age_num = pd.to_numeric(df.get("Age", pd.Series(dtype=float)), errors="coerce")
 if age_num.size:
     age_min, age_max = int(np.nanmin(age_num)), int(np.nanmax(age_num))
 else:
     age_min, age_max = 15, 40
-age_default = (max(age_min, int(params.get("age_from", 15))), min(age_max, int(params.get("age_to", 40))))
-age_range_slider = st.sidebar.slider("Edad (rango)", min_value=age_min, max_value=age_max, value=age_default, key="age_slider")
-age_min_num = st.sidebar.number_input("Edad mínima", min_value=age_min, max_value=age_max, value=int(age_range_slider[0]), step=1, key="age_min_num")
-age_max_num = st.sidebar.number_input("Edad máxima", min_value=age_min, max_value=age_max, value=int(age_range_slider[1]), step=1, key="age_max_num")
+
+age_from = int(params.get("age_from", age_min))
+age_to   = int(params.get("age_to",   age_max))
+
+age_range_slider = st.sidebar.slider(
+    "Edad (rango)",
+    min_value=age_min, max_value=age_max,
+    value=(max(age_min, age_from), min(age_max, age_to)),
+    key="filter_age_slider"
+)
+age_min_num = st.sidebar.number_input(
+    "Edad mínima", min_value=age_min, max_value=age_max,
+    value=int(age_range_slider[0]), step=1, key="filter_age_min"
+)
+age_max_num = st.sidebar.number_input(
+    "Edad máxima", min_value=age_min, max_value=age_max,
+    value=int(age_range_slider[1]), step=1, key="filter_age_max"
+)
 age_range = (int(min(age_min_num, age_max_num)), int(max(age_min_num, age_max_num)))
 
-# --- 7) Minutos jugados (≥) ---
-if scope == "Histórico (≥900′)":
-    global_min = max(900, int(df.get("Min", pd.Series([900])).min())) if "Min" in df else 900
-    global_max = int(df.get("Min", pd.Series([3420])).max()) if "Min" in df else 3420
-    default_min = int(np.clip(900, global_min, global_max))
-    min_sel_slider = st.sidebar.slider("Minutos jugados (≥)", min_value=global_min, max_value=global_max, value=default_min, key="mins_slider_hist")
-    min_sel = st.sidebar.number_input("Escribir minutos (≥)", min_value=global_min, max_value=global_max, value=int(min_sel_slider), step=30, key="mins_num_hist")
-else:
-    cur_df = df[df["Season"].isin(season)] if season else df
-    cur_max = int(cur_df.get("Min", pd.Series([0])).max()) if not cur_df.empty else 0
-    cur_default = min(90, cur_max) if cur_max else 0
-    min_sel_slider = st.sidebar.slider("Minutos jugados (≥)", min_value=0, max_value=cur_max, value=int(cur_default), step=30, key="mins_slider_cur")
-    min_sel = st.sidebar.number_input("Escribir minutos (≥)", min_value=0, max_value=cur_max, value=int(min_sel_slider), step=30, key="mins_num_cur")
-    if min_sel < 900:
-        st.sidebar.caption("🔎 Estás viendo muestras <900′ (muestra parcial).")
+# ---------- 7) Minutos jugados (≥)
+global_min = max(900, int(df["Min"].min())) if "Min" in df else 900
+global_max = int(df["Min"].max()) if "Min" in df else 3420
+default_min = int(np.clip(900, global_min, global_max))
+
+min_sel_slider = st.sidebar.slider(
+    "Minutos jugados (≥)",
+    min_value=global_min, max_value=global_max,
+    value=default_min, key="filter_mins_slider"
+)
+min_sel = st.sidebar.number_input(
+    "Escribir minutos (≥)",
+    min_value=global_min, max_value=global_max,
+    value=int(min_sel_slider), step=30, key="filter_mins_num"
+)
+
+# ---------- Aplica filtros comunes (incluye Jugador/Equipo/Competición/Temporada/Rol/Edad)
+mask_common = True
+if players_sel: mask_common &= df["Player"].isin(players_sel)
+if squads_sel:  mask_common &= df["Squad"].isin(squads_sel)
+if comp:        mask_common &= df["Comp"].isin(comp)
+if season:      mask_common &= df["Season"].isin(season)
+if rol:         mask_common &= df["Rol_Tactico"].isin(rol)
+if age_num.size:
+    mask_common &= age_num.between(age_range[0], age_range[1])
+
+# Base para Overview (histórico/actual se trata en sus subpestañas)
+dff_base = df.loc[mask_common].copy()
+
+# Con minutos (para Ranking / Comparador / Similares / Shortlist y para histórico por defecto)
+mask = mask_common & ((df["Min"] >= min_sel) if "Min" in df else True)
+dff = df.loc[mask].copy()
+
+# Guarda estado en URL (añadimos jugador/equipo)
+st.query_params.update({
+    "players": players_sel, "squads": squads_sel,
+    "comp": comp, "rol": rol, "season": season,
+    "min": str(min_sel),
+    "age_from": str(age_range[0]), "age_to": str(age_range[1]),
+})
+
 
 # --------- Construcción del subconjunto activo (dff_view) ----------
 mask_common = True
@@ -493,4 +548,5 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
 
