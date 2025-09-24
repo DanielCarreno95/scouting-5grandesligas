@@ -5,3 +5,5 @@ numpy
 pyarrow
 fastparquet
 scikit-learn
+streamlit-aggrid
+
