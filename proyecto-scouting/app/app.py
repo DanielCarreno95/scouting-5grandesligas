@@ -53,6 +53,14 @@ def _season_key(s: str) -> int:
     except:
         return -1
 
+def round_numeric_for_display(df: pd.DataFrame, ndigits: int = 2) -> pd.DataFrame:
+    """Devuelve una copia con columnas numéricas redondeadas (solo para mostrar)."""
+    out = df.copy()
+    num_cols = out.select_dtypes(include=["number"]).columns
+    if len(num_cols):
+        out[num_cols] = out[num_cols].round(ndigits)
+    return out
+
 # ---------- Nombres “deportivos” para métricas y campos ----------
 METRIC_LABELS = {
     # Identidad / contexto
@@ -360,8 +368,10 @@ with tab_ranking:
     cols_show = ["Player", "Squad", "Season", "Rol_Tactico", "Comp", "Min", "Age"] + metrics_all
     tabla = dff[cols_show].sort_values(metric_to_rank, ascending=False).head(topn)
 
+    # --- Redondeo SOLO para mostrar ---
+    tabla_disp_num = round_numeric_for_display(tabla, ndigits=2)
     # Renombrar SOLO para mostrar
-    tabla_disp = rename_for_display(tabla, cols_show)
+    tabla_disp = rename_for_display(tabla_disp_num, cols_show)
 
     # ---------- AgGrid con columna Jugador anclada a la izquierda ----------
     try:
@@ -380,7 +390,7 @@ with tab_ranking:
         )
 
         # Fijar columna "Jugador" a la izquierda
-        gb.configure_column(label("Player"), pinned="left")  # <- AQUÍ se fija
+        gb.configure_column(label("Player"), pinned="left")
 
         # Paginar para mejorar UX con tablas largas
         gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=25)
@@ -388,9 +398,7 @@ with tab_ranking:
         # Barra lateral de columnas/filtros
         gb.configure_side_bar()
 
-        # Para que haya scroll horizontal y se vea el pinning:
-        # - Altura fija (no autoHeight)
-        # - No forzar autofit de todas las columnas
+        # Scroll interno
         gb.configure_grid_options(domLayout="normal")
 
         grid_options = gb.build()
@@ -398,11 +406,11 @@ with tab_ranking:
         AgGrid(
             tabla_disp,
             gridOptions=grid_options,
-            theme="streamlit",  # "streamlit" | "alpine" | "balham" ...
+            theme="streamlit",
             update_mode=GridUpdateMode.NO_UPDATE,
-            columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,  # ancho contenido, mantiene scroll
+            columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
             fit_columns_on_grid_load=False,
-            height=580,  # altura fija -> scroll interno vertical + horizontal si hace falta
+            height=580,
             allow_unsafe_jscode=False,
         )
 
@@ -413,6 +421,37 @@ with tab_ranking:
             "y vuelve a desplegar. Mostrando la tabla estándar como fallback."
         )
         st.dataframe(tabla_disp, use_container_width=True)
+
+# ===================== COMPARADOR ========================================
+with tab_compare:
+    stop_if_empty(dff)
+    st.subheader("Comparador de jugadores (Radar)")
+    players = dff["Player"].dropna().unique().tolist()
+    cA, cB = st.columns(2)
+    p1 = cA.selectbox("Jugador A", players, index=0 if players else None, key="pA")
+    p2 = cB.selectbox("Jugador B", players, index=1 if len(players)>1 else 0, key="pB")
+
+    radar_feats = st.multiselect(
+        "Métricas para el radar (elige 4–8)",
+        options=metrics_all,
+        default=metrics_all[:6],
+        key="feats",
+        format_func=lambda c: label(c)
+    )
+
+    def radar(df_in, pA, pB, feats):
+        S = df_in[feats].astype(float)
+        S = normalize_0_1(S)
+        A = S[df_in["Player"]==pA].mean(numeric_only=True).fillna(0)
+        B = S[df_in["Player"]==pB].mean(numeric_only=True).fillna(0)
+        fig = go.Figure()
+        fig.add_trace(go.Scatterpolar(r=A.values, theta=[label(f) for f in feats], fill="toself", name=p1))
+        fig.add_trace(go.Scatterpolar(r=B.values, theta=[label(f) for f in feats], fill="toself", name=p2))
+        fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0,1])), showlegend=True)
+        return fig
+
+    if p1 and p2 and radar_feats:
+        st.plotly_chart(radar(dff, p1, p2, radar_feats), use_container_width=True)
 
 # ===================== SIMILARES =========================================
 with tab_similarity:
@@ -439,7 +478,9 @@ with tab_similarity:
         out["similarity"] = sims
         out = out.sort_values("similarity", ascending=False).head(25)
 
-        st.dataframe(rename_for_display(out, out_cols), use_container_width=True)
+        # --- Redondeo para mostrar ---
+        out_disp_num = round_numeric_for_display(out, ndigits=2)
+        st.dataframe(rename_for_display(out_disp_num, out_cols), use_container_width=True)
 
 # ===================== SHORTLIST =========================================
 with tab_shortlist:
@@ -453,11 +494,15 @@ with tab_shortlist:
     sh = dff[dff["Player"].isin(st.session_state.shortlist)]
 
     base_cols = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]
-    st.dataframe(rename_for_display(sh, base_cols), use_container_width=True)
 
+    # --- Redondeo para mostrar ---
+    sh_disp_num = round_numeric_for_display(sh[base_cols], ndigits=2)
+    st.dataframe(rename_for_display(sh_disp_num, base_cols), use_container_width=True)
+
+    # CSV (si quieres también redondeado, usamos sh_disp_num)
     st.download_button(
         "⬇️ Descargar shortlist (CSV)",
-        data=sh[base_cols].to_csv(index=False).encode("utf-8-sig"),
+        data=sh_disp_num.to_csv(index=False).encode("utf-8-sig"),
         file_name="shortlist_scouting.csv",
         mime="text/csv",
     )
@@ -470,6 +515,3 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
-
-
-
