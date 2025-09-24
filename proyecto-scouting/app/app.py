@@ -347,75 +347,71 @@ with tab_ranking:
     stop_if_empty(dff)
     st.subheader("Ranking por métrica")
 
-    # Mostrar nombres deportivos en el selector, pero devolver la columna real
+    # Selector con key única para evitar StreamlitDuplicateElementId
     metric_to_rank = st.selectbox(
         "Métrica para ordenar",
         options=metrics_all,
         index=0 if metrics_all else None,
-        format_func=lambda c: label(c)
+        format_func=lambda c: label(c),
+        key="rank_metric",
     )
-    topn = st.slider("Top N", 5, 100, 20)
+    topn = st.slider("Top N", 5, 100, 20, key="rank_topn")
 
-    cols_show = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"] + metrics_all
+    cols_show = ["Player", "Squad", "Season", "Rol_Tactico", "Comp", "Min", "Age"] + metrics_all
     tabla = dff[cols_show].sort_values(metric_to_rank, ascending=False).head(topn)
 
-    # Renombrar columnas SOLO para mostrar
-    st.dataframe(rename_for_display(tabla, cols_show), use_container_width=True)
-
-# ===================== RANKING ===========================================
-with tab_ranking:
-    stop_if_empty(dff)
-    st.subheader("Ranking por métrica")
-
-    # Mostrar nombres deportivos en el selector, pero devolver la columna real
-    metric_to_rank = st.selectbox(
-        "Métrica para ordenar",
-        options=metrics_all,
-        index=0 if metrics_all else None,
-        format_func=lambda c: label(c)
-    )
-    topn = st.slider("Top N", 5, 100, 20)
-
-    cols_show = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"] + metrics_all
-    tabla = dff[cols_show].sort_values(metric_to_rank, ascending=False).head(topn)
-
-    # Renombrar columnas SOLO para mostrar
+    # Renombrar SOLO para mostrar
     tabla_disp = rename_for_display(tabla, cols_show)
 
-    # --- Intentar usar AgGrid para pin-left "Jugador"; si no está, fallback a st.dataframe ---
+    # ---------- AgGrid con columna Jugador anclada a la izquierda ----------
     try:
-        from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode
+        from st_aggrid import (
+            AgGrid,
+            GridOptionsBuilder,
+            GridUpdateMode,
+            ColumnsAutoSizeMode,
+        )
 
-        # Construcción de opciones
         gb = GridOptionsBuilder.from_dataframe(tabla_disp)
+
+        # Opciones por defecto: ordenable, filtrable, redimensionable
         gb.configure_default_column(
             sortable=True, filter=True, resizable=True, floatingFilter=True
         )
-        # Pegar columna "Jugador" a la izquierda
-        gb.configure_column(label("Player"), pinned="left")
-        # Un poco de UX
+
+        # Fijar columna "Jugador" a la izquierda
+        gb.configure_column(label("Player"), pinned="left")  # <- AQUÍ se fija
+
+        # Paginar para mejorar UX con tablas largas
         gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=25)
-        gb.configure_side_bar()  # panel lateral de filtros/columns
-        gb.configure_grid_options(
-            rowHeight=28,
-            suppressMenuHide=False,
-            animateRows=True,
-            domLayout="autoHeight",
-        )
+
+        # Barra lateral de columnas/filtros
+        gb.configure_side_bar()
+
+        # Para que haya scroll horizontal y se vea el pinning:
+        # - Altura fija (no autoHeight)
+        # - No forzar autofit de todas las columnas
+        gb.configure_grid_options(domLayout="normal")
+
         grid_options = gb.build()
 
         AgGrid(
             tabla_disp,
             gridOptions=grid_options,
-            theme="streamlit",                # temas: "streamlit", "balham", "alpine", ...
+            theme="streamlit",  # "streamlit" | "alpine" | "balham" ...
             update_mode=GridUpdateMode.NO_UPDATE,
-            columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
-            fit_columns_on_grid_load=False,   # ya fijamos auto size arriba
-            enable_enterprise_modules=False,
+            columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,  # ancho contenido, mantiene scroll
+            fit_columns_on_grid_load=False,
+            height=580,  # altura fija -> scroll interno vertical + horizontal si hace falta
+            allow_unsafe_jscode=False,
         )
 
     except Exception:
         # Fallback si no está streamlit-aggrid instalado
+        st.info(
+            "Para fijar la columna **Jugador** instala `streamlit-aggrid` en `requirements.txt` "
+            "y vuelve a desplegar. Mostrando la tabla estándar como fallback."
+        )
         st.dataframe(tabla_disp, use_container_width=True)
 
 # ===================== SIMILARES =========================================
@@ -474,5 +470,6 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
 
 
