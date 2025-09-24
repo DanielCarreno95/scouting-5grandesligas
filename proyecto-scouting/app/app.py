@@ -22,6 +22,11 @@ div[data-testid="stSidebar"] label { font-weight: 600; }
 div[data-testid="stSidebar"] .stMultiSelect, 
 div[data-testid="stSidebar"] .stSlider,
 div[data-testid="stSidebar"] .stRadio { margin-bottom: .75rem; }
+
+/* Notas/leyendas pequeñas */
+.note {font-size: .85rem; color:#9aa2ad; line-height:1.25rem;}
+.badge {display:inline-block; padding:.12rem .45rem; border-radius:.4rem; 
+        background:#1f2a37; color:#b8c2cc; font-size:.75rem; margin-left:.35rem;}
 </style>
 <div class="big-title"> Scouting Hub — Radar de rendimiento de las 5 grandes ligas</div>
 <p class="subtle">Análisis operativo para dirección deportiva: jugadores con ≥900′, métricas por 90’ y porcentajes (0–100). Filtros por competición, <b>rol táctico</b> y temporada.</p>
@@ -353,10 +358,8 @@ with tab_ranking:
         )
         gb = GridOptionsBuilder.from_dataframe(tabla_disp)
 
-        # Default col
         gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
 
-        # ---- Anchos fijos y pin de Jugador ----
         gb.configure_column(label("Player"), pinned="left", width=230)
         gb.configure_column(label("Squad"), width=180)
         gb.configure_column(label("Season"), width=120)
@@ -365,11 +368,8 @@ with tab_ranking:
         gb.configure_column(label("Min"), width=110)
         gb.configure_column(label("Age"), width=90)
 
-        # Paginación + sidebar
         gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=25)
         gb.configure_side_bar()
-
-        # Evitar que el autosize nos aplaste los anchos definidos
         gb.configure_grid_options(domLayout="normal")
 
         grid_options = gb.build()
@@ -379,7 +379,7 @@ with tab_ranking:
             gridOptions=grid_options,
             theme="streamlit",
             update_mode=GridUpdateMode.NO_UPDATE,
-            columns_auto_size_mode=ColumnsAutoSizeMode.NO_AUTOSIZE,  # <- no tocar los anchos definidos
+            columns_auto_size_mode=ColumnsAutoSizeMode.NO_AUTOSIZE,
             fit_columns_on_grid_load=False,
             height=580,
             allow_unsafe_jscode=False,
@@ -388,18 +388,18 @@ with tab_ranking:
         st.info("Para fijar columnas y anchos usa `streamlit-aggrid` en `requirements.txt`. Mostrando tabla estándar.")
         st.dataframe(tabla_disp, use_container_width=True)
 
-# ===================== COMPARADOR ========================================
+# ===================== COMPARADOR (Nuevo) ===========================
 with tab_compare:
     stop_if_empty(dff_view)
     st.subheader("Comparador de jugadores (Radar)")
 
-    # ---- Selección de jugadores (máx. 3) ----
+    # --- selección de jugadores (máx 3) ---
     players_all = dff_view["Player"].dropna().unique().tolist()
     sel_players = st.multiselect(
-        "Jugadores a comparar (máx. 3)",
-        options=players_all,
+        "Jugadores (máx. 3)",
+        players_all,
         default=players_all[:2] if len(players_all) >= 2 else players_all[:1],
-        key="cmp_players"
+        key="cmp_players",
     )
     if len(sel_players) == 0:
         st.info("Selecciona al menos 1 jugador.")
@@ -407,238 +407,181 @@ with tab_compare:
     if len(sel_players) > 3:
         sel_players = sel_players[:3]
 
-    # ---- Jugador de referencia (para Δ e inferir contexto por rol/competición) ----
-    ref = st.selectbox(
-        "Jugador referencia (baseline para variaciones)",
-        options=sel_players,
+    # --- jugador referencia ---
+    ref_default = sel_players[0]
+    ref_player = st.selectbox(
+        "Jugador referencia (para Δ y percentiles)",
+        sel_players,
         index=0,
-        help="Las columnas Δ y el contexto 'Por rol/competición' usan este jugador como referencia."
+        key="cmp_ref",
     )
 
-    # ---- Contexto de comparación ----
-    st.markdown("**Contexto de comparación**")
-    col_ctx1, col_ctx2, col_ctx3 = st.columns([1.3, 1, 1.2])
-    ctx_mode = col_ctx1.selectbox(
-        "Cálculo de percentiles/baseline",
-        options=["Muestra filtrada", "Por rol táctico", "Por competición"],
-        index=0,
-        help="Define contra qué grupo se calculan percentiles y baseline."
-    )
-    show_baseline   = col_ctx2.toggle("Mostrar baseline", value=True)
-    use_percentiles = col_ctx3.toggle("Tooltip con percentiles", value=True)
-
-    st.caption("• En 'Por rol' o 'Por competición' se usa el rol/competición del **jugador referencia** para definir el grupo.")
-
-    # ---- Métricas del radar (selección manual) ----
+    # --- métricas para el radar ---
     radar_feats = st.multiselect(
         "Métricas para el radar (elige 4–10)",
         options=metrics_all,
         default=metrics_all[:6],
-        help="Elige las métricas que quieres comparar. Mínimo 4 y máximo 10.",
-        key="cmp_feats",
-        format_func=lambda c: label(c)
+        key="feats",
+        format_func=lambda c: label(c),
     )
     if len(radar_feats) < 4:
         st.info("Selecciona al menos 4 métricas para el radar.")
         st.stop()
 
-    # ---- Ponderación (se aplica a radar + índice) ----
-    use_weights = st.checkbox("Aplicar pesos a las métricas", value=True, help="Se aplican tras normalizar 0–1.")
+    # --- pesos por métrica ---
     weights = {f: 1.0 for f in radar_feats}
-    if use_weights:
-        with st.expander("⚖️ Ajustar pesos por métrica (0.5 — 2.0)", expanded=False):
-            for f in radar_feats:
-                weights[f] = st.slider(label(f), 0.5, 2.0, 1.0, 0.1, key=f"w_{f}")
+    with st.expander("⚖️ Ajustar pesos por métrica (0.5 — 2.0)", expanded=False):
+        for f in radar_feats:
+            weights[f] = st.slider(label(f), 0.5, 2.0, 1.0, 0.1, key=f"w_{f}")
 
-    # ---- Helpers ----
+    # --- contexto (grupo para percentiles/baseline) ---
+    col_ctx1, col_ctx2, col_ctx3 = st.columns([1,1,1.2])
+    ctx_mode = col_ctx1.selectbox(
+        "Cálculo de percentiles",
+        options=["Muestra filtrada", "Por rol táctico", "Por competición"],
+        index=0,
+        key="cmp_ctx",
+    )
+    show_baseline = col_ctx2.toggle("Mostrar baseline del grupo", value=True, key="cmp_baseline")
+    use_percentiles = col_ctx3.toggle("Tooltip con percentiles", value=True, key="cmp_pct_tooltip")
+
     def _normalize_0_1(df_num: pd.DataFrame) -> pd.DataFrame:
         mn = df_num.min(axis=0); mx = df_num.max(axis=0)
         return (df_num - mn) / (mx - mn + 1e-9)
 
-    def _percentiles(df_grp: pd.DataFrame, feats: list) -> pd.DataFrame:
-        return df_grp[feats].rank(pct=True)
-
     def _ctx_mask(df_in: pd.DataFrame) -> pd.Series:
         if ctx_mode == "Muestra filtrada":
             return pd.Series(True, index=df_in.index)
-        if ctx_mode == "Por rol táctico" and "Rol_Tactico" in df_in and any(dff_view["Player"] == ref):
-            rol_ref = dff_view.loc[dff_view["Player"] == ref, "Rol_Tactico"].iloc[0]
-            return (df_in["Rol_Tactico"] == rol_ref)
-        if ctx_mode == "Por competición" and "Comp" in df_in and any(dff_view["Player"] == ref):
-            comp_ref = dff_view.loc[dff_view["Player"] == ref, "Comp"].iloc[0]
-            return (df_in["Comp"] == comp_ref)
+        if ctx_mode == "Por rol táctico" and "Rol_Tactico" in df_in:
+            rol_ref = dff_view.loc[dff_view["Player"] == ref_player, "Rol_Tactico"].iloc[0] if any(dff_view["Player"] == ref_player) else None
+            return (df_in["Rol_Tactico"] == rol_ref) if rol_ref is not None else pd.Series(True, index=df_in.index)
+        if ctx_mode == "Por competición" and "Comp" in df_in:
+            comp_ref = dff_view.loc[dff_view["Player"] == ref_player, "Comp"].iloc[0] if any(dff_view["Player"] == ref_player) else None
+            return (df_in["Comp"] == comp_ref) if comp_ref is not None else pd.Series(True, index=df_in.index)
         return pd.Series(True, index=df_in.index)
 
-    def _hex_to_rgba(hex_color: str, alpha: float) -> str:
-        hex_color = hex_color.lstrip("#")
-        r = int(hex_color[0:2], 16); g = int(hex_color[2:4], 16); b = int(hex_color[4:6], 16)
-        return f"rgba({r},{g},{b},{alpha:.2f})"
-
-    def _weighted_index(vec_norm: pd.Series, feats: list, w: dict) -> float:
-        """Promedio ponderado sobre métricas normalizadas 0–1."""
-        ww = np.array([w[f] for f in feats], dtype=float)
-        vv = vec_norm[feats].values.astype(float)
-        return float((vv * ww).sum() / (ww.sum() + 1e-9))  # 0..1
-
-    # ---- Grupo de contexto ----
+    # -------- grupo/normalización/pesos ----------
     df_group = dff_view[_ctx_mask(dff_view)].copy()
     if df_group.empty:
-        st.warning("No hay jugadores en el grupo de contexto con los filtros actuales. Se usará la muestra filtrada.")
         df_group = dff_view.copy()
 
-    # ---- Normalización y pesos ----
-    S_raw  = df_group[radar_feats].astype(float).copy()
-    S_norm = _normalize_0_1(S_raw)               # 0..1
-    S_w    = S_norm.copy()                       # aplica pesos después de normalizar (mejor práctica)
-    if use_weights:
-        for f in radar_feats:
-            S_w[f] = S_w[f] * float(weights[f])
+    S = df_group[radar_feats].astype(float).copy()
+    for f in radar_feats:
+        S[f] = S[f] * weights[f]   # <- pesos que afectan radar e índice
+    S_norm = _normalize_0_1(S)
+    baseline = S_norm.mean(axis=0)
 
-    baseline_w = S_w.mean(axis=0)                # baseline ya ponderado
+    # percentiles (crudo, sin pesos)
+    pct = df_group[radar_feats].rank(pct=True) if use_percentiles else None
 
-    # ---- Percentiles (sobre crudo, no ponderado) ----
-    pct = _percentiles(df_group, radar_feats) if use_percentiles else None
-
-    # ---- Radar (colores y estilos) ----
+    # -------- Radar ----------
     theta_labels = [label(f) for f in radar_feats]
     fig = go.Figure()
-    palette_hex = ["#4F8BF9", "#F95F53", "#2BB673"]  # azul, coral, verde
-    fill_alpha  = 0.30
+    palette = ["#4F8BF9", "#F95F53", "#2BB673"]  # azul, coral, verde
 
     for i, pl in enumerate(sel_players):
-        # vector normalizado ponderado del jugador
-        vec_w  = S_w[df_group["Player"] == pl].mean(numeric_only=True).fillna(0)
-        # percentiles para tooltip (opcional)
+        r_vec = S_norm[df_group["Player"] == pl][radar_feats].mean().fillna(0).values
         pct_pl = None
         if pct is not None:
-            pct_pl = pct[df_group["Player"] == pl].mean(numeric_only=True)
+            pct_pl = pct[df_group["Player"] == pl][radar_feats].mean()
 
         fig.add_trace(go.Scatterpolar(
-            r=vec_w[radar_feats].values,                 # <- ya ponderado
+            r=r_vec,
             theta=theta_labels,
-            name=pl,
-            line=dict(color=palette_hex[i % len(palette_hex)], width=3),
-            marker=dict(color=palette_hex[i % len(palette_hex)], size=6),
             fill="toself",
-            fillcolor=_hex_to_rgba(palette_hex[i % len(palette_hex)], fill_alpha),
-            hovertemplate="<b>%{theta}</b><br>Índice local (0–1): %{r:.3f}"
-                          + ("<br>Percentil crudo: %{customdata:.0%}" if (pct_pl is not None) else "")
+            name=pl + (" (ref.)" if pl == ref_player else ""),
+            line=dict(color=palette[i % len(palette)], width=2),
+            opacity=0.85 if pl == ref_player else 0.7,
+            hovertemplate="<b>%{theta}</b><br>Índice 0–1: %{r:.3f}"
+                          + ("<br>Percentil: %{customdata:.0%}" if pct_pl is not None else "")
                           + "<extra></extra>",
-            customdata=(pct_pl[radar_feats].values if pct_pl is not None else None),
+            customdata=(pct_pl.values if pct_pl is not None else None),
         ))
 
     if show_baseline:
         fig.add_trace(go.Scatterpolar(
-            r=baseline_w[radar_feats].values,
+            r=baseline[radar_feats].values,
             theta=theta_labels,
-            name="Baseline",
-            line=dict(dash="dash", color="#BBBBBB", width=2),
+            name="Baseline grupo",
+            line=dict(dash="dash", color="#B9BEC6"),
             fill=None,
-            hovertemplate="<b>%{theta}</b><br>Baseline ponderado: %{r:.3f}<extra></extra>"
+            hovertemplate="<b>%{theta}</b><br>Baseline: %{r:.3f}<extra></extra>",
         ))
 
     fig.update_layout(
         template="plotly_dark",
-        polar=dict(
-            radialaxis=dict(visible=True, range=[0, 1], tickfont=dict(size=11), gridcolor="#444"),
-            angularaxis=dict(tickfont=dict(size=12), gridcolor="#444")
-        ),
-        legend=dict(orientation="h", y=-0.15),
-        margin=dict(l=30, r=30, t=10, b=60),
-        showlegend=True
+        polar=dict(radialaxis=dict(visible=True, range=[0,1], gridcolor="#374151", linecolor="#4b5563")),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.2, x=0),
+        margin=dict(l=30, r=30, t=10, b=10)
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # ---- KPI: Índice ponderado (0–100) por jugador ----
-    # Se calcula sobre S_norm (0..1) y 'weights' -> promedio ponderado.
-    st.markdown("**Índice ponderado (0–100)**  \nCombina todas las métricas normalizadas según tus pesos.")
+    # --- KPI de índice ponderado (0–100) por jugador ---
+    st.caption("**Índice ponderado (0–100)** · Combina las métricas normalizadas según tus pesos.")
     cols_kpi = st.columns(len(sel_players))
-    indices = {}
     for i, pl in enumerate(sel_players):
-        vec_norm = S_norm[df_group["Player"] == pl].mean(numeric_only=True).fillna(0)
-        idx01    = _weighted_index(vec_norm, radar_feats, weights)  # 0..1
-        indices[pl] = idx01
+        val = S_norm[df_group["Player"] == pl][radar_feats].mean(axis=1).mean() * 100
         delta = None
-        if pl != ref:
-            delta = round(100*(idx01 - indices.get(ref, idx01)), 1) if ref in indices else None
-        cols_kpi[i].metric(pl, f"{100*idx01:.1f}", (f"{delta:+.1f}" if delta is not None else None))
+        if pl != ref_player:
+            ref_val = S_norm[df_group["Player"] == ref_player][radar_feats].mean(axis=1).mean() * 100
+            delta = round(val - ref_val, 1)
+        cols_kpi[i].metric(pl, f"{val:,.1f}", delta=None if delta is None else (f"{delta:+.1f}"))
 
-    # ---- Tabla de valores crudos + Δ por métrica (vs referencia) ----
+    # -------- Tabla comparativa ----------
     raw_group = dff_view[_ctx_mask(dff_view)].copy()
     rows = {}
     for pl in sel_players:
-        vals = raw_group[raw_group["Player"] == pl][radar_feats].astype(float).mean(numeric_only=True)
-        rows[pl] = vals
+        rows[pl] = raw_group[raw_group["Player"] == pl][radar_feats].astype(float).mean()
 
     df_cmp = pd.DataFrame({"Métrica": [label(f) for f in radar_feats]})
     for pl, vals in rows.items():
         df_cmp[pl] = vals.values
 
-    # Δ por métrica (Jugador - Referencia)
+    # Δ vs referencia para cada jugador
     for pl in sel_players:
-        if pl == ref:
+        if pl == ref_player: 
             continue
-        df_cmp[f"Δ ({pl} - {ref})"] = (rows[pl] - rows[ref]).values
+        df_cmp[f"Δ ({pl} − {ref_player})"] = df_cmp[pl] - df_cmp[ref_player]
 
-    # Percentiles crudos por jugador (opcional)
+    # Percentiles (0–100) por jugador dentro del grupo
     if use_percentiles:
-        pct_raw = _percentiles(raw_group, radar_feats)
+        pct_raw = raw_group[radar_feats].rank(pct=True)
         for pl in sel_players:
-            pr = pct_raw[raw_group["Player"] == pl].mean(numeric_only=True)
-            df_cmp[f"% {pl}"] = (pr.values * 100)
+            pr = pct_raw[raw_group["Player"] == pl][radar_feats].mean(numeric_only=True) * 100
+            df_cmp[f"% {pl}"] = pr.values
 
-    # Redondeo y orden por la Δ de la primera comparación si existe
-    num_cols = [c for c in df_cmp.columns if c != "Métrica"]
-    df_cmp[num_cols] = df_cmp[num_cols].astype(float).round(3)
-    delta_cols = [c for c in df_cmp.columns if c.startswith("Δ (")]
-    if delta_cols:
-        df_cmp = df_cmp.reindex(df_cmp[delta_cols[0]].abs().sort_values(ascending=False).index)
+    # redondeo y orden por la primera Δ si existe
+    for c in df_cmp.columns:
+        if c != "Métrica":
+            df_cmp[c] = pd.to_numeric(df_cmp[c], errors="coerce").round(3)
 
-    st.markdown("**Tabla comparativa**  \n"
-                "• Columnas de jugadores: valores crudos (por 90).  \n"
-                f"• **Δ**: diferencia respecto a **{ref}** (Jugador − Referencia).  \n"
-                "• **%**: percentil crudo dentro del grupo de contexto seleccionado.")
+    first_delta = [c for c in df_cmp.columns if c.startswith("Δ (")]
+    if first_delta:
+        df_cmp = df_cmp.reindex(df_cmp[first_delta[0]].abs().sort_values(ascending=False).index)
+
+    st.caption(
+        """
+        <div class="note">
+        <b>¿Cómo leer la tabla?</b><br>
+        • Columnas con nombre de jugador: valor crudo por 90’.<br>
+        • <b>Δ (A − ref)</b>: diferencia de A contra el <i>Jugador referencia</i> seleccionado arriba.<br>
+        • <b>%</b>: percentil del jugador dentro del grupo de contexto que elijas (muestra/rol/competición).<br>
+        </div>
+        """, unsafe_allow_html=True
+    )
     st.dataframe(df_cmp, use_container_width=True)
 
-    # ---- Tabla breve de Índice ponderado (para exportar) ----
-    idx_rows = []
-    for pl in sel_players:
-        idx01 = indices[pl]
-        idx = 100*idx01
-        diff = 100*(idx01 - indices[ref]) if pl != ref else 0.0
-        idx_rows.append({"Jugador": pl, "Índice ponderado (0–100)": round(idx, 1),
-                         f"Δ índice ({pl} - {ref})": round(diff, 1) if pl != ref else 0.0})
-    df_idx = pd.DataFrame(idx_rows)
-    st.markdown("**Resumen — Índice ponderado**")
-    st.dataframe(df_idx, use_container_width=True)
-
-    # ---- Exportaciones ----
+    # --- exportar radar ---
     try:
-        png_bytes = fig.to_image(format="png", scale=2)  # requiere kaleido
+        import io
+        png_bytes = fig.to_image(format="png", scale=2)  # requiere 'kaleido' en requirements.txt
         st.download_button(
-            "🖼️ Descargar radar (PNG)",
-            data=png_bytes,
+            "🖼️ Descargar radar (PNG)", data=png_bytes,
             file_name=f"radar_{'_vs_'.join(sel_players)}.png",
-            mime="image/png",
-            key="cmp_png_dl"
+            mime="image/png", key="cmp_png_dl"
         )
     except Exception:
-        st.caption("ℹ️ Para exportar PNG instala **kaleido** en `requirements.txt`.")
-
-    st.download_button(
-        "⬇️ Descargar comparación (CSV)",
-        data=df_cmp.to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"comparacion_{'_vs_'.join(sel_players)}.csv",
-        mime="text/csv",
-        key="cmp_csv_dl"
-    )
-    st.download_button(
-        "⬇️ Descargar índices ponderados (CSV)",
-        data=df_idx.to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"indices_ponderados_{'_vs_'.join(sel_players)}.csv",
-        mime="text/csv",
-        key="cmp_idx_csv_dl"
-    )
+        st.caption('Para exportar PNG instala <code>kaleido</code> en <code>requirements.txt</code>.', unsafe_allow_html=True)
 
 # ===================== SIMILARES =========================
 with tab_similarity:
@@ -698,12 +641,3 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
-
-
-
-
-
-
-
-
-
