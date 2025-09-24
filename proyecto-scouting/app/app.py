@@ -580,8 +580,7 @@ with tab_compare:
         file_name=f"comparacion_{'_vs_'.join(sel_players)}.csv",
         mime="text/csv",
         key="cmp_csv_dl"
-    )
-            
+    )        
 # ===================== SIMILARES =========================
 with tab_similarity:
     stop_if_empty(dff_view)
@@ -640,6 +639,7 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
 
 
 
