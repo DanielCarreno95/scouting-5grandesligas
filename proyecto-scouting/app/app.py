@@ -388,36 +388,193 @@ with tab_ranking:
         st.info("Para fijar columnas y anchos usa `streamlit-aggrid` en `requirements.txt`. Mostrando tabla estándar.")
         st.dataframe(tabla_disp, use_container_width=True)
 
-# ===================== COMPARADOR ========================
+# ===================== COMPARADOR ========================================
 with tab_compare:
-    stop_if_empty(dff_view)
+    stop_if_empty(dff)
     st.subheader("Comparador de jugadores (Radar)")
-    players = dff_view["Player"].dropna().unique().tolist()
+
+    # ---------- plantillas de métricas (puedes afinarlas cuando quieras) ----------
+    TEMPLATES = {
+        "⚽ Finalizador": ["Gls_per90", "xG_per90", "SoT_per90", "G/SoT_per90", "xA_per90", "KP_per90"],
+        "🎯 Creador": ["xA_per90", "KP_per90", "GCA90_per90", "SCA_per90", "PrgP_per90", "Cmp%"],
+        "🔋 Box-to-box": ["PrgC_per90", "Carries_per90", "Tkl+Int_per90", "Recov_per90", "Cmp_per90", "Gls_per90"],
+        "🛡️ Central": ["Tkl+Int_per90", "Int_per90", "Recov_per90", "Clr_per90", "Cmp%", "PrgP_per90"],
+        "🚀 Lateral": ["PrgC_per90", "PrgP_per90", "PPA_per90", "SCA_per90", "Tkl+Int_per90", "Recov_per90"],
+        "🧤 Portero": ["Save%", "PSxG+/-_per90", "Saves_per90", "Launch%", "PSxG_per90", "CS%"],
+    }
+    # filtra solo métricas existentes en tu dataset actual
+    TEMPLATES = {k: [m for m in v if m in metrics_all] for k, v in TEMPLATES.items()}
+
+    # ---------- selección de jugadores ----------
+    players = dff["Player"].dropna().unique().tolist()
     cA, cB = st.columns(2)
     p1 = cA.selectbox("Jugador A", players, index=0 if players else None, key="pA")
     p2 = cB.selectbox("Jugador B", players, index=1 if len(players)>1 else 0, key="pB")
 
-    radar_feats = st.multiselect(
-        "Métricas para el radar (elige 4–8)",
+    # ---------- modo de contexto para percentiles y baseline ----------
+    st.markdown("**Contexto de comparación**")
+    col_ctx1, col_ctx2, col_ctx3 = st.columns([1,1,1.5])
+    ctx_mode = col_ctx1.selectbox(
+        "Cálculo de percentiles",
+        options=["Muestra filtrada", "Por rol táctico", "Por competición"],
+        index=0,
+        help="Define contra qué grupo se calculan percentiles y baseline.",
+        key="cmp_ctx",
+    )
+    show_baseline = col_ctx2.toggle("Mostrar baseline del grupo", value=True, key="cmp_baseline")
+    use_percentiles = col_ctx3.toggle("Tooltip con percentiles", value=True, key="cmp_pct_tooltip")
+
+    # ---------- plantilla de métricas ----------
+    col_tpl, col_ms = st.columns([1,3])
+    tpl_name = col_tpl.selectbox("Plantillas de métricas", options=list(TEMPLATES.keys())+["(Personalizado)"], index=0, key="tpl")
+    default_feats = TEMPLATES.get(tpl_name, metrics_all[:6])
+
+    radar_feats = col_ms.multiselect(
+        "Métricas para el radar (elige 4–10)",
         options=metrics_all,
-        default=metrics_all[:6],
+        default=default_feats[: min(10, len(default_feats))],
         key="feats",
         format_func=lambda c: label(c)
     )
 
-    def radar(df_in, pA, pB, feats):
-        S = df_in[feats].astype(float)
-        S = normalize_0_1(S)
-        A = S[df_in["Player"]==pA].mean(numeric_only=True).fillna(0)
-        B = S[df_in["Player"]==pB].mean(numeric_only=True).fillna(0)
-        fig = go.Figure()
-        fig.add_trace(go.Scatterpolar(r=A.values, theta=[label(f) for f in feats], fill="toself", name=p1))
-        fig.add_trace(go.Scatterpolar(r=B.values, theta=[label(f) for f in feats], fill="toself", name=p2))
-        fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0,1])), showlegend=True)
-        return fig
+    # ---------- pesos (para adaptar al modelo de juego) ----------
+    weights = {f: 1.0 for f in radar_feats}
+    with st.expander("⚖️ Ajustar pesos por métrica (0.5 — 2.0)", expanded=False):
+        for f in radar_feats:
+            weights[f] = st.slider(label(f), 0.5, 2.0, 1.0, 0.1, key=f"w_{f}")
 
-    if p1 and p2 and radar_feats:
-        st.plotly_chart(radar(dff_view, p1, p2, radar_feats), use_container_width=True)
+    # ========== helpers locales ==========
+    def _ctx_mask(df_in):
+        """Devuelve la máscara de grupo según ctx_mode para baseline/percentiles."""
+        if ctx_mode == "Por rol táctico" and p1:
+            rol_ref = dff.loc[dff["Player"] == p1, "Rol_Tactico"].iloc[0] if "Rol_Tactico" in dff else None
+            return (df_in["Rol_Tactico"] == rol_ref) if rol_ref is not None else pd.Series(True, index=df_in.index)
+        if ctx_mode == "Por competición" and p1:
+            comp_ref = dff.loc[dff["Player"] == p1, "Comp"].iloc[0] if "Comp" in dff else None
+            return (df_in["Comp"] == comp_ref) if comp_ref is not None else pd.Series(True, index=df_in.index)
+        return pd.Series(True, index=df_in.index)
+
+    def _normalize_0_1(df_num: pd.DataFrame) -> pd.DataFrame:
+        mn = df_num.min(axis=0); mx = df_num.max(axis=0)
+        return (df_num - mn) / (mx - mn + 1e-9)
+
+    def _percentiles(df_grp: pd.DataFrame, feats: list) -> pd.DataFrame:
+        # percentil simple por columna (0–1) dentro del grupo
+        pct = df_grp[feats].rank(pct=True)
+        return pct
+
+    # ========== datos de los jugadores seleccionados ==========
+    if not p1 or not p2 or len(radar_feats) < 4:
+        st.info("Selecciona dos jugadores y al menos 4 métricas para mostrar el radar.")
+        st.stop()
+
+    df_group = dff[_ctx_mask(dff)].copy()
+    if df_group.empty:
+        st.warning("El grupo de contexto para percentiles/baseline está vacío con los filtros actuales.")
+        df_group = dff.copy()
+
+    # normalización 0–1 + pesos para el radar
+    S = df_group[radar_feats].astype(float)
+    for f in radar_feats:  # aplica pesos
+        S[f] = S[f] * weights[f]
+    S_norm = _normalize_0_1(S)
+
+    # medias del grupo (baseline)
+    baseline = S_norm.mean(axis=0)
+
+    # vectores A/B (promedio por si aparecen varias filas del mismo jugador)
+    A = S_norm[df_group["Player"] == p1].mean(numeric_only=True).fillna(0)
+    B = S_norm[df_group["Player"] == p2].mean(numeric_only=True).fillna(0)
+
+    # percentiles para tooltip (sin pesos, sobre valores brutos por claridad)
+    pct = _percentiles(df_group, radar_feats) if use_percentiles else None
+    pctA = pct[df_group["Player"] == p1].mean(numeric_only=True) if pct is not None else None
+    pctB = pct[df_group["Player"] == p2].mean(numeric_only=True) if pct is not None else None
+
+    # ========== radar ==========
+    theta_labels = [label(f) for f in radar_feats]
+    fig = go.Figure()
+    # jugadores
+    fig.add_trace(go.Scatterpolar(
+        r=A[radar_feats].values, theta=theta_labels, fill="toself", name=p1,
+        hovertemplate="<b>%{theta}</b><br>Index 0–1: %{r:.3f}"
+                      + ( "<br>Percentil: %{customdata:.0%}" if use_percentiles and pctA is not None else "" )
+                      + "<extra></extra>",
+        customdata=(pctA[radar_feats].values if use_percentiles and pctA is not None else None),
+    ))
+    fig.add_trace(go.Scatterpolar(
+        r=B[radar_feats].values, theta=theta_labels, fill="toself", name=p2,
+        hovertemplate="<b>%{theta}</b><br>Index 0–1: %{r:.3f}"
+                      + ( "<br>Percentil: %{customdata:.0%}" if use_percentiles and pctB is not None else "" )
+                      + "<extra></extra>",
+        customdata=(pctB[radar_feats].values if use_percentiles and pctB is not None else None),
+    ))
+    # baseline
+    if show_baseline:
+        fig.add_trace(go.Scatterpolar(
+            r=baseline[radar_feats].values, theta=theta_labels, name="Baseline grupo",
+            line=dict(dash="dash"), fill=None, hovertemplate="<b>%{theta}</b><br>Baseline: %{r:.3f}<extra></extra>"
+        ))
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0,1])),
+        showlegend=True, margin=dict(l=30, r=30, t=10, b=10)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ========== tabla comparativa con deltas ==========
+    # valores crudos (sin normalizar) para lectura humana
+    raw_group = dff[_ctx_mask(dff)].copy()
+    A_raw = raw_group[raw_group["Player"] == p1][radar_feats].astype(float).mean(numeric_only=True)
+    B_raw = raw_group[raw_group["Player"] == p2][radar_feats].astype(float).mean(numeric_only=True)
+
+    df_cmp = pd.DataFrame({
+        "Métrica": [label(f) for f in radar_feats],
+        p1: A_raw.values,
+        p2: B_raw.values,
+        "Δ (A - B)": (A_raw - B_raw).values
+    })
+    # percentiles crudos
+    if use_percentiles:
+        pct_raw = _percentiles(raw_group, radar_feats)
+        pctA_raw = pct_raw[raw_group["Player"] == p1].mean(numeric_only=True)
+        pctB_raw = pct_raw[raw_group["Player"] == p2].mean(numeric_only=True)
+        df_cmp["% "+p1] = (pctA_raw.values * 100)
+        df_cmp["% "+p2] = (pctB_raw.values * 100)
+
+    # ordena por diferencia absoluta
+    df_cmp = df_cmp.reindex(df_cmp["Δ (A - B)"].abs().sort_values(ascending=False).index)
+
+    # redondeo a 3 decimales (tu preferencia actual)
+    num_cols = [c for c in df_cmp.columns if c != "Métrica"]
+    df_cmp[num_cols] = df_cmp[num_cols].astype(float).round(3)
+
+    st.markdown("**Diferencias por métrica** (ordenadas por gap absoluto)")
+    st.dataframe(df_cmp, use_container_width=True)
+
+    # ========== export ==========
+    colx1, colx2 = st.columns(2)
+    with colx1:
+        st.download_button(
+            "⬇️ Descargar comparación (CSV)",
+            data=df_cmp.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"comparacion_{p1}_vs_{p2}.csv",
+            mime="text/csv",
+            key="cmp_csv_dl"
+        )
+    with colx2:
+        try:
+            import io
+            png_bytes = fig.to_image(format="png", scale=2)  # requiere 'kaleido' en requirements
+            st.download_button(
+                "🖼️ Descargar radar (PNG)",
+                data=png_bytes,
+                file_name=f"radar_{p1}_vs_{p2}.png",
+                mime="image/png",
+                key="cmp_png_dl"
+            )
+        except Exception:
+            st.caption("ℹ️ Para exportar PNG instala **kaleido** en `requirements.txt`.")
+
 
 # ===================== SIMILARES =========================
 with tab_similarity:
@@ -477,3 +634,4 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
