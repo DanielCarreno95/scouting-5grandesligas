@@ -153,71 +153,67 @@ age_to     = int(params.get("age_to", 40))
 # ===================== Filtros (orden solicitado) ========
 st.sidebar.markdown('<div class="sidebar-title">Filtros</div>', unsafe_allow_html=True)
 
-# 1) Jugador
-player_opts = sorted(df["Player"].dropna().unique())
-players_sel = st.sidebar.multiselect("Jugador", player_opts)
+# --- 1) Jugador (con buscador explícito) ---
+player_all = sorted(df["Player"].dropna().unique())
+q_player = st.sidebar.text_input("Buscar jugador", placeholder="Escribe un nombre…", key="q_player")
+player_opts = [p for p in player_all if q_player.lower() in p.lower()] if q_player else player_all
+players_sel = st.sidebar.multiselect("Jugador", player_opts, placeholder="Selecciona jugador(es)…", key="players_sel")
 
-# 2) Equipo
-squad_opts = sorted(df["Squad"].dropna().unique())
-squads_sel = st.sidebar.multiselect("Equipo", squad_opts)
+# --- 2) Equipo (con buscador explícito) ---
+squad_all = sorted(df["Squad"].dropna().unique())
+q_squad = st.sidebar.text_input("Buscar equipo", placeholder="Escribe un equipo…", key="q_squad")
+squad_opts = [s for s in squad_all if q_squad.lower() in s.lower()] if q_squad else squad_all
+squads_sel = st.sidebar.multiselect("Equipo", squad_opts, placeholder="Selecciona equipo(s)…", key="squads_sel")
 
-# 3) Competición
-comp_opts = sorted(df["Comp"].dropna().unique())
-comp = st.sidebar.multiselect("Competición", comp_opts, default=comp_pre)
+# --- 3) Competición (con buscador explícito) ---
+comp_all = sorted(df["Comp"].dropna().unique())
+q_comp = st.sidebar.text_input("Buscar competición", placeholder="Escribe una competición…", key="q_comp")
+comp_opts = [c for c in comp_all if q_comp.lower() in c.lower()] if q_comp else comp_all
+# mantiene los defaults que venían de la URL si existen
+comp_default = [c for c in comp_pre if c in comp_opts] if 'comp_pre' in locals() else None
+comp = st.sidebar.multiselect("Competición", comp_opts, default=comp_default, placeholder="Selecciona competición(es)…", key="comp_sel")
 
-# 4) Temporada (con ámbito)
+# --- 4) Temporada (con ámbito histórico / actual) ---
 season_opts_all = sorted(df["Season"].dropna().unique(), key=_season_key)
 current_season = season_opts_all[-1] if season_opts_all else None
-
-scope = st.sidebar.radio(
-    "Temporada",
-    options=["Histórico (≥900′)", "Temporada en curso"],
-    index=0,
-)
+scope = st.sidebar.radio("Temporada", ["Histórico (≥900′)", "Temporada en curso"], index=0)
 
 if scope == "Histórico (≥900′)":
     default_hist = [s for s in season_opts_all if s != current_season] or season_opts_all
-    season = st.sidebar.multiselect("Selecciona temporada(s)", season_opts_all, default=default_hist)
+    season = st.sidebar.multiselect("Selecciona temporada(s)", season_opts_all, default=default_hist, key="season_hist")
 else:
     season = [current_season] if current_season else []
     st.sidebar.caption(f"Temporada actual: **{current_season or '—'}**")
 
-# 5) Rol táctico (posición)
+# --- 5) Rol táctico ---
 rol_opts  = sorted(df["Rol_Tactico"].dropna().unique())
-rol  = st.sidebar.multiselect("Rol táctico (posición)", rol_opts, default=rol_pre)
+rol  = st.sidebar.multiselect("Rol táctico (posición)", rol_opts, default=rol_pre if 'rol_pre' in locals() else None, key="rol_sel")
 
-# 6) Edad (rango)
+# --- 6) Edad (rango) ---
 age_num = pd.to_numeric(df.get("Age", pd.Series(dtype=float)), errors="coerce")
 if age_num.size:
     age_min, age_max = int(np.nanmin(age_num)), int(np.nanmax(age_num))
 else:
     age_min, age_max = 15, 40
-age_default = (max(age_min, age_from), min(age_max, age_to))
-age_range_slider = st.sidebar.slider("Edad (rango)", min_value=age_min, max_value=age_max,
-                                     value=age_default, key="age_slider")
-age_min_num = st.sidebar.number_input("Edad mínima", min_value=age_min, max_value=age_max,
-                                      value=int(age_range_slider[0]), step=1, key="age_min_num")
-age_max_num = st.sidebar.number_input("Edad máxima", min_value=age_min, max_value=age_max,
-                                      value=int(age_range_slider[1]), step=1, key="age_max_num")
+age_default = (max(age_min, int(params.get("age_from", 15))), min(age_max, int(params.get("age_to", 40))))
+age_range_slider = st.sidebar.slider("Edad (rango)", min_value=age_min, max_value=age_max, value=age_default, key="age_slider")
+age_min_num = st.sidebar.number_input("Edad mínima", min_value=age_min, max_value=age_max, value=int(age_range_slider[0]), step=1, key="age_min_num")
+age_max_num = st.sidebar.number_input("Edad máxima", min_value=age_min, max_value=age_max, value=int(age_range_slider[1]), step=1, key="age_max_num")
 age_range = (int(min(age_min_num, age_max_num)), int(max(age_min_num, age_max_num)))
 
-# 7) Minutos jugados (≥)
+# --- 7) Minutos jugados (≥) ---
 if scope == "Histórico (≥900′)":
     global_min = max(900, int(df.get("Min", pd.Series([900])).min())) if "Min" in df else 900
     global_max = int(df.get("Min", pd.Series([3420])).max()) if "Min" in df else 3420
     default_min = int(np.clip(900, global_min, global_max))
-    min_sel_slider = st.sidebar.slider("Minutos jugados (≥)", min_value=global_min, max_value=global_max,
-                                       value=default_min, key="mins_slider_hist")
-    min_sel = st.sidebar.number_input("Escribir minutos (≥)", min_value=global_min, max_value=global_max,
-                                      value=int(min_sel_slider), step=30, key="mins_num_hist")
+    min_sel_slider = st.sidebar.slider("Minutos jugados (≥)", min_value=global_min, max_value=global_max, value=default_min, key="mins_slider_hist")
+    min_sel = st.sidebar.number_input("Escribir minutos (≥)", min_value=global_min, max_value=global_max, value=int(min_sel_slider), step=30, key="mins_num_hist")
 else:
     cur_df = df[df["Season"].isin(season)] if season else df
     cur_max = int(cur_df.get("Min", pd.Series([0])).max()) if not cur_df.empty else 0
     cur_default = min(90, cur_max) if cur_max else 0
-    min_sel_slider = st.sidebar.slider("Minutos jugados (≥)", min_value=0, max_value=cur_max,
-                                       value=int(cur_default), step=30, key="mins_slider_cur")
-    min_sel = st.sidebar.number_input("Escribir minutos (≥)", min_value=0, max_value=cur_max,
-                                      value=int(min_sel_slider), step=30, key="mins_num_cur")
+    min_sel_slider = st.sidebar.slider("Minutos jugados (≥)", min_value=0, max_value=cur_max, value=int(cur_default), step=30, key="mins_slider_cur")
+    min_sel = st.sidebar.number_input("Escribir minutos (≥)", min_value=0, max_value=cur_max, value=int(min_sel_slider), step=30, key="mins_num_cur")
     if min_sel < 900:
         st.sidebar.caption("🔎 Estás viendo muestras <900′ (muestra parcial).")
 
@@ -497,3 +493,4 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
