@@ -271,7 +271,6 @@ st.query_params.update({
     "age_from": str(age_range[0]), "age_to": str(age_range[1]),
 })
 
-
 # --------- Construcción del subconjunto activo (dff_view) ----------
 mask_common = True
 if len(players_sel): mask_common &= df["Player"].isin(players_sel)
