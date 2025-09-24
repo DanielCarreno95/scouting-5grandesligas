@@ -205,7 +205,7 @@ else:
     if min_sel < 900:
         st.sidebar.caption("🔎 Estás viendo muestras <900′ (muestra parcial).")
 
-# --------- Construcción del subconjunto activo (dff_view) ----------
+# --------- Subconjunto activo ----------
 mask_common = True
 if player: mask_common &= df["Player"].isin(player)
 if squad:  mask_common &= df["Squad"].isin(squad)
@@ -333,33 +333,83 @@ with tab_ranking:
     stop_if_empty(dff_view)
     st.subheader("Ranking por métrica")
 
-    metric_to_rank = st.selectbox(
-        "Métrica para ordenar",
-        options=metrics_all,
-        index=0 if metrics_all else None,
-        format_func=lambda c: label(c),
-        key="rank_metric",
+    # Modo: una métrica vs multi-métrica ponderado
+    rank_mode = st.radio(
+        "Modo de ordenación",
+        ["Por una métrica", "Multi-métrica (ponderado)"],
+        horizontal=True,
+        key="rank_mode"
     )
-    topn = st.slider("Top N", 5, 100, 20, key="rank_topn")
 
-    cols_show = ["Player", "Squad", "Season", "Rol_Tactico", "Comp", "Min", "Age"] + metrics_all
-    tabla = dff_view[cols_show].sort_values(metric_to_rank, ascending=False).head(topn)
-
-    # Redondeo a 3 decimales SOLO para mostrar y renombre para display
-    tabla_disp_num = round_numeric_for_display(tabla, ndigits=3)
-    tabla_disp = rename_for_display(tabla_disp_num, cols_show)
-
-    try:
-        from st_aggrid import (
-            AgGrid,
-            GridOptionsBuilder,
-            GridUpdateMode,
-            ColumnsAutoSizeMode,
+    if rank_mode == "Por una métrica":
+        metric_to_rank = st.selectbox(
+            "Métrica para ordenar",
+            options=metrics_all,
+            index=0 if metrics_all else None,
+            format_func=lambda c: label(c),
+            key="rank_metric",
         )
+        topn = st.slider("Top N", 5, 100, 20, key="rank_topn")
+
+        cols_show = ["Player", "Squad", "Season", "Rol_Tactico", "Comp", "Min", "Age"] + metrics_all
+        tabla = dff_view[cols_show].sort_values(metric_to_rank, ascending=False).head(topn)
+
+        # Redondeo + renombre
+        tabla_disp_num = round_numeric_for_display(tabla, ndigits=3)
+        tabla_disp = rename_for_display(tabla_disp_num, cols_show)
+
+    else:
+        st.caption('<div class="note">El índice ponderado normaliza cada métrica (0–1), aplica tu peso y combina. 100 = mejor del grupo.</div>', unsafe_allow_html=True)
+
+        # 1) Selección de métricas
+        mm_feats = st.multiselect(
+            "Elige 3–12 métricas para construir el índice",
+            options=metrics_all,
+            default=metrics_all[:6],
+            format_func=lambda c: label(c),
+            key="mm_feats"
+        )
+        if len(mm_feats) < 3:
+            st.info("Selecciona al menos 3 métricas.")
+            st.stop()
+
+        # 2) Pesos por métrica
+        weights = {}
+        with st.expander("⚖️ Pesos por métrica (0.5–3.0)", expanded=True):
+            for f in mm_feats:
+                weights[f] = st.slider(label(f), 0.5, 3.0, 1.0, 0.1, key=f"rankw_{f}")
+
+        # 3) Índice ponderado
+        X = dff_view[mm_feats].astype(float).copy()
+        # imputación simple para evitar NaN antes de normalizar
+        for c in mm_feats:
+            X[c] = X[c].fillna(X[c].median())
+        Xn = (X - X.min()) / (X.max() - X.min() + 1e-9)
+
+        w = np.array([weights[f] for f in mm_feats], dtype=float)
+        w = w / (w.sum() + 1e-9)
+        score = (Xn.values @ w) * 100.0  # 0–100
+
+        df_rank = dff_view[["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]].copy()
+        for f in mm_feats:
+            df_rank[f] = dff_view[f].astype(float)
+        df_rank["Índice ponderado"] = score
+
+        topn = st.slider("Top N", 5, 200, 50, key="rank_topn_mm")
+        df_rank = df_rank.sort_values("Índice ponderado", ascending=False).head(topn)
+
+        # Redondeo y renombre
+        tabla_disp_num = round_numeric_for_display(df_rank, ndigits=3)
+        # índice con 1 decimal
+        tabla_disp_num["Índice ponderado"] = pd.to_numeric(tabla_disp_num["Índice ponderado"], errors="coerce").round(1)
+        cols_show = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age","Índice ponderado"] + mm_feats
+        tabla_disp = rename_for_display(tabla_disp_num, cols_show)
+
+    # -------- Render tabla (AgGrid si está disponible) --------
+    try:
+        from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode
         gb = GridOptionsBuilder.from_dataframe(tabla_disp)
-
         gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
-
         gb.configure_column(label("Player"), pinned="left", width=230)
         gb.configure_column(label("Squad"), width=180)
         gb.configure_column(label("Season"), width=120)
@@ -367,11 +417,11 @@ with tab_ranking:
         gb.configure_column(label("Comp"), width=170)
         gb.configure_column(label("Min"), width=110)
         gb.configure_column(label("Age"), width=90)
-
+        if rank_mode != "Por una métrica":
+            gb.configure_column("Índice ponderado", width=160)
         gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=25)
         gb.configure_side_bar()
         gb.configure_grid_options(domLayout="normal")
-
         grid_options = gb.build()
 
         AgGrid(
@@ -385,15 +435,21 @@ with tab_ranking:
             allow_unsafe_jscode=False,
         )
     except Exception:
-        st.info("Para fijar columnas y anchos usa `streamlit-aggrid` en `requirements.txt`. Mostrando tabla estándar.")
         st.dataframe(tabla_disp, use_container_width=True)
 
-# ===================== COMPARADOR (Nuevo) ===========================
+    st.download_button(
+        "⬇️ Descargar ranking (CSV)",
+        data=tabla_disp.to_csv(index=False).encode("utf-8-sig"),
+        file_name="ranking_scouting.csv",
+        mime="text/csv",
+        key="rank_dl"
+    )
+
+# ===================== COMPARADOR (sin pesos) ===========================
 with tab_compare:
     stop_if_empty(dff_view)
     st.subheader("Comparador de jugadores (Radar)")
 
-    # --- selección de jugadores (máx 3) ---
     players_all = dff_view["Player"].dropna().unique().tolist()
     sel_players = st.multiselect(
         "Jugadores (máx. 3)",
@@ -407,16 +463,8 @@ with tab_compare:
     if len(sel_players) > 3:
         sel_players = sel_players[:3]
 
-    # --- jugador referencia ---
-    ref_default = sel_players[0]
-    ref_player = st.selectbox(
-        "Jugador referencia (para Δ y percentiles)",
-        sel_players,
-        index=0,
-        key="cmp_ref",
-    )
+    ref_player = st.selectbox("Jugador referencia (para Δ y percentiles)", sel_players, index=0, key="cmp_ref")
 
-    # --- métricas para el radar ---
     radar_feats = st.multiselect(
         "Métricas para el radar (elige 4–10)",
         options=metrics_all,
@@ -428,13 +476,6 @@ with tab_compare:
         st.info("Selecciona al menos 4 métricas para el radar.")
         st.stop()
 
-    # --- pesos por métrica ---
-    weights = {f: 1.0 for f in radar_feats}
-    with st.expander("⚖️ Ajustar pesos por métrica (0.5 — 2.0)", expanded=False):
-        for f in radar_feats:
-            weights[f] = st.slider(label(f), 0.5, 2.0, 1.0, 0.1, key=f"w_{f}")
-
-    # --- contexto (grupo para percentiles/baseline) ---
     col_ctx1, col_ctx2, col_ctx3 = st.columns([1,1,1.2])
     ctx_mode = col_ctx1.selectbox(
         "Cálculo de percentiles",
@@ -444,10 +485,6 @@ with tab_compare:
     )
     show_baseline = col_ctx2.toggle("Mostrar baseline del grupo", value=True, key="cmp_baseline")
     use_percentiles = col_ctx3.toggle("Tooltip con percentiles", value=True, key="cmp_pct_tooltip")
-
-    def _normalize_0_1(df_num: pd.DataFrame) -> pd.DataFrame:
-        mn = df_num.min(axis=0); mx = df_num.max(axis=0)
-        return (df_num - mn) / (mx - mn + 1e-9)
 
     def _ctx_mask(df_in: pd.DataFrame) -> pd.Series:
         if ctx_mode == "Muestra filtrada":
@@ -460,24 +497,18 @@ with tab_compare:
             return (df_in["Comp"] == comp_ref) if comp_ref is not None else pd.Series(True, index=df_in.index)
         return pd.Series(True, index=df_in.index)
 
-    # -------- grupo/normalización/pesos ----------
     df_group = dff_view[_ctx_mask(dff_view)].copy()
     if df_group.empty:
         df_group = dff_view.copy()
 
     S = df_group[radar_feats].astype(float).copy()
-    for f in radar_feats:
-        S[f] = S[f] * weights[f]   # <- pesos que afectan radar e índice
-    S_norm = _normalize_0_1(S)
+    S_norm = (S - S.min()) / (S.max() - S.min() + 1e-9)
     baseline = S_norm.mean(axis=0)
-
-    # percentiles (crudo, sin pesos)
     pct = df_group[radar_feats].rank(pct=True) if use_percentiles else None
 
-    # -------- Radar ----------
     theta_labels = [label(f) for f in radar_feats]
     fig = go.Figure()
-    palette = ["#4F8BF9", "#F95F53", "#2BB673"]  # azul, coral, verde
+    palette = ["#4F8BF9", "#F95F53", "#2BB673"]
 
     for i, pl in enumerate(sel_players):
         r_vec = S_norm[df_group["Player"] == pl][radar_feats].mean().fillna(0).values
@@ -516,8 +547,8 @@ with tab_compare:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- KPI de índice ponderado (0–100) por jugador ---
-    st.caption("**Índice ponderado (0–100)** · Combina las métricas normalizadas según tus pesos.")
+    # KPI simple (media de las métricas normalizadas, sin pesos)
+    st.caption("**Índice agregado (0–100)** · Media de métricas normalizadas (peso igual).")
     cols_kpi = st.columns(len(sel_players))
     for i, pl in enumerate(sel_players):
         val = S_norm[df_group["Player"] == pl][radar_feats].mean(axis=1).mean() * 100
@@ -527,7 +558,7 @@ with tab_compare:
             delta = round(val - ref_val, 1)
         cols_kpi[i].metric(pl, f"{val:,.1f}", delta=None if delta is None else (f"{delta:+.1f}"))
 
-    # -------- Tabla comparativa ----------
+    # Tabla comparativa (crudo) con Δ vs referencia y percentiles
     raw_group = dff_view[_ctx_mask(dff_view)].copy()
     rows = {}
     for pl in sel_players:
@@ -536,21 +567,17 @@ with tab_compare:
     df_cmp = pd.DataFrame({"Métrica": [label(f) for f in radar_feats]})
     for pl, vals in rows.items():
         df_cmp[pl] = vals.values
-
-    # Δ vs referencia para cada jugador
     for pl in sel_players:
         if pl == ref_player: 
             continue
         df_cmp[f"Δ ({pl} − {ref_player})"] = df_cmp[pl] - df_cmp[ref_player]
 
-    # Percentiles (0–100) por jugador dentro del grupo
     if use_percentiles:
         pct_raw = raw_group[radar_feats].rank(pct=True)
         for pl in sel_players:
             pr = pct_raw[raw_group["Player"] == pl][radar_feats].mean(numeric_only=True) * 100
             df_cmp[f"% {pl}"] = pr.values
 
-    # redondeo y orden por la primera Δ si existe
     for c in df_cmp.columns:
         if c != "Métrica":
             df_cmp[c] = pd.to_numeric(df_cmp[c], errors="coerce").round(3)
@@ -562,19 +589,17 @@ with tab_compare:
     st.caption(
         """
         <div class="note">
-        <b>¿Cómo leer la tabla?</b><br>
-        • Columnas con nombre de jugador: valor crudo por 90’.<br>
-        • <b>Δ (A − ref)</b>: diferencia de A contra el <i>Jugador referencia</i> seleccionado arriba.<br>
-        • <b>%</b>: percentil del jugador dentro del grupo de contexto que elijas (muestra/rol/competición).<br>
+        <b>Cómo leer:</b> columnas con nombre de jugador = valor por 90’ · 
+        <b>Δ</b> = diferencia vs el <i>Jugador referencia</i> · 
+        <b>%</b> = percentil dentro del grupo elegido (muestra/rol/competición).
         </div>
         """, unsafe_allow_html=True
     )
     st.dataframe(df_cmp, use_container_width=True)
 
-    # --- exportar radar ---
+    # Export radar (opcional, requiere kaleido)
     try:
-        import io
-        png_bytes = fig.to_image(format="png", scale=2)  # requiere 'kaleido' en requirements.txt
+        png_bytes = fig.to_image(format="png", scale=2)
         st.download_button(
             "🖼️ Descargar radar (PNG)", data=png_bytes,
             file_name=f"radar_{'_vs_'.join(sel_players)}.png",
