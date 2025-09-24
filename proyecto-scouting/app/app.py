@@ -146,15 +146,15 @@ age_to     = int(params.get("age_to", 40))
 # ===================== Filtros (orden solicitado) ====================
 st.sidebar.header("Filtros")
 
-# 1) Jugador
+# 1) Jugador (con buscador)
 player_opts = sorted(df["Player"].dropna().unique())
 player = st.sidebar.multiselect("Jugador", player_opts, default=player_pre)
 
-# 2) Equipo
+# 2) Equipo (con buscador)
 squad_opts = sorted(df["Squad"].dropna().unique())
 squad = st.sidebar.multiselect("Equipo", squad_opts, default=squad_pre)
 
-# 3) Competición
+# 3) Competición (con buscador)
 comp_opts = sorted(df["Comp"].dropna().unique())
 comp = st.sidebar.multiselect("Competición", comp_opts, default=comp_pre)
 
@@ -175,11 +175,11 @@ else:
     season = [current_season] if current_season else []
     st.sidebar.write(f"**Temporada en curso:** {current_season or '—'}")
 
-# 5) Rol táctico
+# 5) Rol táctico (posición)
 rol_opts = sorted(df["Rol_Tactico"].dropna().unique())
 rol = st.sidebar.multiselect("Rol táctico (posición)", rol_opts, default=rol_pre)
 
-# 6) Edad (slider)
+# 6) Edad (rango) — solo slider
 age_num = pd.to_numeric(df.get("Age", pd.Series(dtype=float)), errors="coerce")
 if age_num.size:
     age_min, age_max = int(np.nanmin(age_num)), int(np.nanmax(age_num))
@@ -189,7 +189,7 @@ age_default = (max(age_min, age_from), min(age_max, age_to))
 age_range = st.sidebar.slider("Edad (rango)", min_value=age_min, max_value=age_max,
                               value=age_default, key="age_slider_only")
 
-# 7) Minutos jugados (≥)
+# 7) Minutos jugados (≥) — solo slider
 if scope == "Histórico (≥900′)":
     global_min = max(900, int(df.get("Min", pd.Series([900])).min())) if "Min" in df else 900
     global_max = int(df.get("Min", pd.Series([3420])).max()) if "Min" in df else 3420
@@ -227,21 +227,14 @@ st.query_params.update({
     "age_from": str(age_range[0]), "age_to": str(age_range[1]),
 })
 
-# ===================== Métricas (MEJORA 1: dinámicas GK/campo) ==========================
-GK_METRICS = ["Save%", "PSxG+/-_per90", "PSxG_per90", "Saves_per90", "CS%", "Launch%"]
-OUT_METRICS = [
+# ===================== Métricas ==========================
+out_metrics = [
     "Gls_per90","xG_per90","NPxG_per90","Sh_per90","SoT_per90","G/SoT_per90",
     "xA_per90","KP_per90","GCA90_per90","SCA_per90",
     "PrgP_per90","PrgC_per90","Carries_per90",
     "Cmp%","Cmp_per90","Tkl+Int_per90","Int_per90","Recov_per90"
 ]
-def infer_is_gk(df_in: pd.DataFrame) -> bool:
-    if "Rol_Tactico" not in df_in.columns: return False
-    return df_in["Rol_Tactico"].astype(str).str.contains("GK|Portero", case=False, na=False).any()
-
-IS_GK = infer_is_gk(dff_view)
-base_metrics = GK_METRICS if IS_GK else OUT_METRICS
-metrics_all = [m for m in base_metrics if m in dff_view.columns]
+metrics_all = [m for m in out_metrics if m in dff_view.columns]
 
 # ===================== Tabs ==============================
 tab_overview, tab_ranking, tab_compare, tab_similarity, tab_shortlist = st.tabs(
@@ -340,6 +333,7 @@ with tab_ranking:
     stop_if_empty(dff_view)
     st.subheader("Ranking por métrica")
 
+    # Modo: una métrica vs multi-métrica ponderado
     rank_mode = st.radio(
         "Modo de ordenación",
         ["Por una métrica", "Multi-métrica (ponderado)"],
@@ -356,13 +350,18 @@ with tab_ranking:
             key="rank_metric",
         )
         topn = st.slider("Top N", 5, 100, 20, key="rank_topn")
+
         cols_show = ["Player", "Squad", "Season", "Rol_Tactico", "Comp", "Min", "Age"] + metrics_all
         tabla = dff_view[cols_show].sort_values(metric_to_rank, ascending=False).head(topn)
+
+        # Redondeo + renombre
         tabla_disp_num = round_numeric_for_display(tabla, ndigits=3)
         tabla_disp = rename_for_display(tabla_disp_num, cols_show)
 
     else:
         st.caption('<div class="note">El índice ponderado normaliza cada métrica (0–1), aplica tu peso y combina. 100 = mejor del grupo.</div>', unsafe_allow_html=True)
+
+        # 1) Selección de métricas
         mm_feats = st.multiselect(
             "Elige 3–12 métricas para construir el índice",
             options=metrics_all,
@@ -374,15 +373,19 @@ with tab_ranking:
             st.info("Selecciona al menos 3 métricas.")
             st.stop()
 
+        # 2) Pesos por métrica
         weights = {}
         with st.expander("⚖️ Pesos por métrica (0.5–3.0)", expanded=True):
             for f in mm_feats:
                 weights[f] = st.slider(label(f), 0.5, 3.0, 1.0, 0.1, key=f"rankw_{f}")
 
+        # 3) Índice ponderado
         X = dff_view[mm_feats].astype(float).copy()
+        # imputación simple para evitar NaN antes de normalizar
         for c in mm_feats:
             X[c] = X[c].fillna(X[c].median())
         Xn = (X - X.min()) / (X.max() - X.min() + 1e-9)
+
         w = np.array([weights[f] for f in mm_feats], dtype=float)
         w = w / (w.sum() + 1e-9)
         score = (Xn.values @ w) * 100.0  # 0–100
@@ -394,41 +397,13 @@ with tab_ranking:
 
         topn = st.slider("Top N", 5, 200, 50, key="rank_topn_mm")
         df_rank = df_rank.sort_values("Índice ponderado", ascending=False).head(topn)
+
+        # Redondeo y renombre
         tabla_disp_num = round_numeric_for_display(df_rank, ndigits=3)
+        # índice con 1 decimal
         tabla_disp_num["Índice ponderado"] = pd.to_numeric(tabla_disp_num["Índice ponderado"], errors="coerce").round(1)
         cols_show = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age","Índice ponderado"] + mm_feats
         tabla_disp = rename_for_display(tabla_disp_num, cols_show)
-
-    # ---------- MEJORA 2: Percentiles opcionales ----------
-    pct_mode = st.selectbox(
-        "Contexto de percentiles",
-        ["Sin percentiles", "Muestra filtrada", "Por rol táctico", "Por competición"],
-        index=0, key="rank_pct_mode"
-    )
-
-    def add_percentiles(df_base: pd.DataFrame, df_full: pd.DataFrame, cols: list, mode: str) -> pd.DataFrame:
-        if mode == "Sin percentiles" or not cols:
-            return df_base
-        ctx = dff_view.copy()
-        # (simplificación: usamos la muestra filtrada como contexto base)
-        ctx_num = ctx[cols].astype(float)
-        ranks = ctx_num.rank(pct=True)
-        df_out = df_base.copy()
-        for c in cols:
-            ser = ranks[c]
-            aligned = ser.reindex(dff_view.index)
-            if hasattr(dff_view.index, "map"):
-                df_out[f"% {c}"] = dff_view.index.map(aligned).values
-        for c in [x for x in df_out.columns if x.startswith("% ")]:
-            df_out[c] = (pd.to_numeric(df_out[c], errors="coerce") * 100).round(1)
-        return df_out
-
-    if rank_mode == "Por una métrica":
-        active_metric_cols = [metric_to_rank]
-        tabla_disp = add_percentiles(tabla_disp, dff_view, active_metric_cols, pct_mode)
-    else:
-        active_metric_cols = [c for c in cols_show if c in metrics_all]
-        tabla_disp = add_percentiles(tabla_disp, dff_view, active_metric_cols, pct_mode)
 
     # -------- Render tabla (AgGrid si está disponible) --------
     try:
@@ -470,7 +445,7 @@ with tab_ranking:
         key="rank_dl"
     )
 
-# ===================== COMPARADOR (Radar) ===========================
+# ===================== COMPARADOR (sin pesos) ===========================
 with tab_compare:
     stop_if_empty(dff_view)
     st.subheader("Comparador de jugadores (Radar)")
@@ -572,7 +547,7 @@ with tab_compare:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # KPI simple (media de métricas normalizadas, sin pesos)
+    # KPI simple (media de las métricas normalizadas, sin pesos)
     st.caption("**Índice agregado (0–100)** · Media de métricas normalizadas (peso igual).")
     cols_kpi = st.columns(len(sel_players))
     for i, pl in enumerate(sel_players):
@@ -583,7 +558,7 @@ with tab_compare:
             delta = round(val - ref_val, 1)
         cols_kpi[i].metric(pl, f"{val:,.1f}", delta=None if delta is None else (f"{delta:+.1f}"))
 
-    # Tabla comparativa cruda con Δ y percentiles
+    # Tabla comparativa (crudo) con Δ vs referencia y percentiles
     raw_group = dff_view[_ctx_mask(dff_view)].copy()
     rows = {}
     for pl in sel_players:
@@ -611,13 +586,15 @@ with tab_compare:
     if first_delta:
         df_cmp = df_cmp.reindex(df_cmp[first_delta[0]].abs().sort_values(ascending=False).index)
 
-    st.caption("""
+    st.caption(
+        """
         <div class="note">
         <b>Cómo leer:</b> columnas con nombre de jugador = valor por 90’ · 
         <b>Δ</b> = diferencia vs el <i>Jugador referencia</i> · 
         <b>%</b> = percentil dentro del grupo elegido (muestra/rol/competición).
         </div>
-        """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True
+    )
     st.dataframe(df_cmp, use_container_width=True)
 
     # Export radar (opcional, requiere kaleido)
@@ -631,7 +608,7 @@ with tab_compare:
     except Exception:
         st.caption('Para exportar PNG instala <code>kaleido</code> en <code>requirements.txt</code>.', unsafe_allow_html=True)
 
-# ===================== SIMILARES (MEJORA 3) =========================
+# ===================== SIMILARES =========================
 with tab_similarity:
     stop_if_empty(dff_view)
     st.subheader("Jugadores similares (cosine similarity)")
@@ -644,27 +621,20 @@ with tab_similarity:
     )
     target = st.selectbox("Jugador objetivo", dff_view["Player"].dropna().unique().tolist())
     if feats_sim and target:
-        Xdf = dff_view[feats_sim].astype(float).fillna(0.0)
-        X = (Xdf - Xdf.min()) / (Xdf.max() - Xdf.min() + 1e-9)
-        X = X.to_numpy()
-
+        X = dff_view[feats_sim].astype(float).fillna(0.0).to_numpy()
+        X = (X - X.min(axis=0)) / (X.max(axis=0) - X.min(axis=0) + 1e-9)
         from numpy.linalg import norm
-        try:
-            row_idx = dff_view.index[dff_view["Player"] == target][0]
-            v = X[dff_view.index.get_loc(row_idx)]
-        except Exception:
-            st.warning("No pude localizar al jugador objetivo en el subconjunto.")
-            st.stop()
+        idx = dff_view.index[dff_view["Player"]==target][0]
+        v = X[dff_view.index.get_loc(idx)]
+        sims = (X @ v) / (norm(X, axis=1)*norm(v) + 1e-9)
 
-        sims = (X @ v) / (norm(X, axis=1) * (norm(v) + 1e-9) + 1e-9)
-
+        out_cols = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age","similarity"]
         out = dff_view[["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]].copy()
         out["similarity"] = sims
         out = out.sort_values("similarity", ascending=False).head(25)
 
         out_disp_num = round_numeric_for_display(out, ndigits=3)
-        st.dataframe(rename_for_display(out_disp_num, ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age","similarity"]),
-                     use_container_width=True)
+        st.dataframe(rename_for_display(out_disp_num, out_cols), use_container_width=True)
 
 # ===================== SHORTLIST =========================
 with tab_shortlist:
