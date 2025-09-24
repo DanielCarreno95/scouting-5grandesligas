@@ -60,52 +60,52 @@ METRIC_LABELS = {
     "Rol_Tactico": "Rol táctico", "Comp": "Competición", "Min": "Minutos", "Age": "Edad",
 
     # Ofensivo / finalización
-    "Gls_per90": "Goles por 90",
-    "xG_per90": "Goles esperados por 90",
-    "NPxG_per90": "Goles esperados (Sin penaltis) por 90",
-    "Sh_per90": "Tiros por 90",
-    "SoT_per90": "Tiros a puerta por 90",
-    "G/SoT_per90": "Goles por tiro a puerta (90)",
+    "Gls_per90": "Goles por 90 (Gls_per90)",
+    "xG_per90": "Goles esperados por 90 (xG_per90)",
+    "NPxG_per90": "Goles esperados sin penaltis por 90 (NPxG_per90)",
+    "Sh_per90": "Tiros por 90 (Sh_per90)",
+    "SoT_per90": "Tiros a puerta por 90 (SoT_per90)",
+    "G/SoT_per90": "Goles por tiro a puerta por 90 (G/SoT_per90)",
 
     # Creatividad
-    "xA_per90": "Asistencias esperadas por 90",
-    "xAG_per90": "Asistencias + Goles esperados por 90",
-    "KP_per90": "Pases clave por 90",
-    "GCA90_per90": "Acciones que generan gol por 90",
-    "SCA_per90": "Acciones que generan tiro por 90",
-    "1/3_per90": "Recuperaciones en último tercio por 90",
-    "PPA_per90": "Pases al área penal por 90",
+    "xA_per90": "Asistencias esperadas por 90 (xA_per90)",
+    "xAG_per90": "Asistencias + Goles esperados por 90 (xAG_per90)",
+    "KP_per90": "Pases clave por 90 (KP_per90)",
+    "GCA90_per90": "Acciones que generan gol por 90 (GCA90_per90)",
+    "SCA_per90": "Acciones que generan tiro por 90 (SCA_per90)",
+    "1/3_per90": "Recuperaciones en último tercio por 90 (1/3_per90)",
+    "PPA_per90": "Pases al área penal por 90 (PPA_per90)",
 
     # Progresión
-    "PrgP_per90": "Pases progresivos por 90",
-    "PrgC_per90": "Conducciones progresivas por 90",
-    "Carries_per90": "Conducciones por 90",
-    "TotDist_per90": "Distancia total por 90",
+    "PrgP_per90": "Pases progresivos por 90 (PrgP_per90)",
+    "PrgC_per90": "Conducciones progresivas por 90 (PrgC_per90)",
+    "Carries_per90": "Conducciones por 90 (Carries_per90)",
+    "TotDist_per90": "Distancia total por 90 (TotDist_per90)",
 
     # Defensa
-    "Tkl+Int_per90": "Entradas + Intercepciones por 90",
-    "Int_per90": "Intercepciones por 90",
-    "Recov_per90": "Recuperaciones por 90",
-    "Blocks_per90": "Bloqueos por 90",
-    "Clr_per90": "Despejes por 90",
+    "Tkl+Int_per90": "Entradas + Intercepciones por 90 (Tkl+Int_per90)",
+    "Int_per90": "Intercepciones por 90 (Int_per90)",
+    "Recov_per90": "Recuperaciones por 90 (Recov_per90)",
+    "Blocks_per90": "Bloqueos por 90 (Blocks_per90)",
+    "Clr_per90": "Despejes por 90 (Clr_per90)",
 
     # Posesión / pérdidas / presión
-    "Touches_per90": "Toques por 90",
-    "Dis_per90": "Pérdidas por 90",
-    "Pressures_per90": "Presiones por 90",
-    "Err_per90": "Errores por 90",
+    "Touches_per90": "Toques por 90 (Touches_per90)",
+    "Dis_per90": "Pérdidas por 90 (Dis_per90)",
+    "Pressures_per90": "Presiones por 90 (Pressures_per90)",
+    "Err_per90": "Errores por 90 (Err_per90)",
 
     # Pase
-    "Cmp%": "Precisión de pase (%)",
-    "Cmp_per90": "Pases completados por 90",
+    "Cmp%": "Porcentaje Precisión de pase (Cmp%)",
+    "Cmp_per90": "Pases completados por 90 (Cmp_per90)",
 
     # Porteros
-    "Save%": "% Paradas",
-    "PSxG+/-_per90": "Goles evitados por 90",
-    "PSxG_per90": "Calidad de tiros recibidos por 90",
-    "Saves_per90": "Paradas por 90",
-    "CS%": "% Porterías a cero",
-    "Launch%": "% Saques largos",
+    "Save%": "Porcentajes de Paradas (Save%)",
+    "PSxG+/-_per90": "Goles evitados por 90 (PSxG+/-_per90)",
+    "PSxG_per90": "Calidad de tiros recibidos por 90 (PSxG_per90)",
+    "Saves_per90": "Paradas por 90 (Saves_per90)",
+    "CS%": "Porcentaje de Porterías a cero (CS%)",
+    "Launch%": "Porcentaje de Saques largos (Launch%)",
 }
 
 def label(col: str) -> str:
@@ -449,3 +449,4 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
