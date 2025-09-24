@@ -644,7 +644,19 @@ with tab_compare:
             data=df_cmp.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"comparacion_{ref_player}_vs_{'_'.join(sel_comparators)}.csv",
             mime="text/csv",
-            key="cmp_csv_dl"
+            key="cmp_csv_dl")
+    with c2:
+        try:
+            png_bytes = fig.to_image(format="png", scale=2)  # requiere 'kaleido' en requirements.txt
+            st.download_button(
+                "🖼️ Descargar radar (PNG)",
+                data=png_bytes,
+                file_name=f"radar_{ref_player}_vs_{'_'.join(sel_comparators)}.png",
+                mime="image/png",
+                key="cmp_png_dl"
+            )
+        except Exception:
+            st.caption("ℹ️ Para exportar PNG instala **kaleido** en `requirements.txt`.")
 
             
 # ===================== SIMILARES =========================
@@ -705,6 +717,7 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
 
 
 
