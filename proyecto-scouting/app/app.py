@@ -342,51 +342,74 @@ with tab_ranking:
     )
 
     if rank_mode == "Por una métrica":
-        metric_to_rank = st.selectbox(
-            "Métrica para ordenar",
-            options=metrics_all,
-            index=0 if metrics_all else None,
-            format_func=lambda c: label(c),
-            key="rank_metric",
-        )
-        topn = st.slider("Top N", 5, 100, 20, key="rank_topn")
+    # --- Controles ---
+    metric_to_rank = st.selectbox(
+        "Métrica para ordenar",
+        options=metrics_all,
+        index=0 if metrics_all else None,
+        format_func=lambda c: label(c),
+        key="rank_metric",
+    )
 
-        # --- Identificadores + métricas ---
-        cols_id = ["Player", "Squad", "Season", "Rol_Tactico", "Comp", "Min", "Age"]
-        cols_metrics = [m for m in metrics_all if m in dff_view.columns]
-        tabla = dff_view[cols_id + cols_metrics].copy()
+    order_dir = st.radio(
+        "Orden", ["Descendente (mejor arriba)", "Ascendente (peor arriba)"],
+        horizontal=True, key="rank_order"
+    )
+    ascending = order_dir.startswith("Asc")
 
-        # --- Enriquecimiento útil para scouting ---
-        m = metric_to_rank
-        # Ranking (1 = mejor) por la métrica elegida
-        tabla["Rank"] = tabla[m].rank(ascending=False, method="min").astype(int)
-        # Percentil en la muestra filtrada
-        tabla["Pct (muestra)"] = (tabla[m].rank(pct=True) * 100).round(1)
-        # Percentil por rol (si existe)
-        if "Rol_Tactico" in tabla.columns:
-            tabla["Pct (por rol)"] = tabla.groupby("Rol_Tactico")[m].rank(pct=True).mul(100).round(1)
-        # Percentil por competición (si existe)
-        if "Comp" in tabla.columns:
-            tabla["Pct (por comp)"] = tabla.groupby("Comp")[m].rank(pct=True).mul(100).round(1)
-
-        # Orden final de columnas
-        cols_ctx = [c for c in ["Rank", "Pct (muestra)", "Pct (por rol)", "Pct (por comp)"] if c in tabla.columns]
-        cols_show = cols_id + cols_ctx + cols_metrics
-
-        # Ordenar por métrica y cortar TopN
-        tabla = tabla.sort_values(m, ascending=False).head(topn)
-
-        # Redondeo + renombre para mostrar
-        tabla_disp_num = round_numeric_for_display(tabla, ndigits=3)
-        tabla_disp = rename_for_display(tabla_disp_num, cols_show)
-
+    show_all = st.checkbox("Mostrar todos", value=False, key="rank_show_all")
+    if show_all:
+        topn = len(dff_view)
     else:
-        st.caption(
-            '<div class="note">El índice ponderado normaliza cada métrica (0–1), '
-            'aplica tu peso y combina. 100 = mejor del grupo.</div>',
-            unsafe_allow_html=True
-        )
+        topn = st.slider("Top N", 5, max(100, min(1000, len(dff_view))), 100, key="rank_topn")
 
+    # --- Métricas en las que 'menos es mejor' (invertir percentil) ---
+    LOWER_IS_BETTER = {"Err_per90", "Dis_per90"}  # añade más si procede
+    lower_better = metric_to_rank in LOWER_IS_BETTER
+
+    def pct_series(s: pd.Series, lower_better: bool) -> pd.Series:
+        """Percentil 0–1; si lower_better, invierte para que mayor = mejor."""
+        p = s.rank(pct=True)
+        return (1 - p) if lower_better else p
+
+    # --- Base completa = muestra total filtrada ---
+    cols_id = ["Player", "Squad", "Season", "Rol_Tactico", "Comp", "Min", "Age"]
+    cols_metrics = [m for m in metrics_all if m in dff_view.columns]
+    df_full = dff_view[cols_id + cols_metrics].copy()
+
+    # Rank (1 = mejor) calculado en la muestra total filtrada
+    # Si 'lower is better', el menor valor recibe Rank=1
+    df_full["Rank"] = df_full[metric_to_rank].rank(
+        ascending=lower_better, method="min"
+    ).astype(int)
+
+    # Percentiles calculados en la muestra total filtrada (y se reflejan al filtrar)
+    df_full["Pct (muestra)"] = (pct_series(df_full[metric_to_rank], lower_better) * 100).round(1)
+
+    if "Rol_Tactico" in df_full.columns:
+        df_full["Pct (por rol)"] = df_full.groupby("Rol_Tactico")[metric_to_rank] \
+            .transform(lambda s: (pct_series(s, lower_better) * 100)).round(1)
+
+    if "Comp" in df_full.columns:
+        df_full["Pct (por comp)"] = df_full.groupby("Comp")[metric_to_rank] \
+            .transform(lambda s: (pct_series(s, lower_better) * 100)).round(1)
+
+    # Orden para mostrar y corte TopN (esto no afecta al cálculo de percentiles)
+    df_view = df_full.sort_values(metric_to_rank, ascending=ascending).head(topn).copy()
+
+    # Orden final de columnas
+    cols_ctx = [c for c in ["Rank", "Pct (muestra)", "Pct (por rol)", "Pct (por comp)"] if c in df_view.columns]
+    cols_show = cols_id + cols_ctx + cols_metrics
+
+    # Redondeo + renombre para mostrar
+    tabla_disp_num = round_numeric_for_display(df_view, ndigits=3)
+    tabla_disp = rename_for_display(tabla_disp_num, cols_show)
+
+    st.caption(
+        "📌 **Percentiles** calculados sobre la **muestra total filtrada** (dff_view). "
+        "Si cambias competición, temporada, rol, edad o minutos, los percentiles cambian "
+        "coherentemente con el nuevo universo."
+    )
         # 1) Selección de métricas
         mm_feats = st.multiselect(
             "Elige 3–12 métricas para construir el índice",
@@ -707,4 +730,5 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
 
