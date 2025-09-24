@@ -351,15 +351,41 @@ with tab_ranking:
         )
         topn = st.slider("Top N", 5, 100, 20, key="rank_topn")
 
-        cols_show = ["Player", "Squad", "Season", "Rol_Tactico", "Comp", "Min", "Age"] + metrics_all
-        tabla = dff_view[cols_show].sort_values(metric_to_rank, ascending=False).head(topn)
+        # --- Identificadores + métricas ---
+        cols_id = ["Player", "Squad", "Season", "Rol_Tactico", "Comp", "Min", "Age"]
+        cols_metrics = [m for m in metrics_all if m in dff_view.columns]
+        tabla = dff_view[cols_id + cols_metrics].copy()
 
-        # Redondeo + renombre
+        # --- Enriquecimiento útil para scouting ---
+        m = metric_to_rank
+        # Ranking (1 = mejor) por la métrica elegida
+        tabla["Rank"] = tabla[m].rank(ascending=False, method="min").astype(int)
+        # Percentil en la muestra filtrada
+        tabla["Pct (muestra)"] = (tabla[m].rank(pct=True) * 100).round(1)
+        # Percentil por rol (si existe)
+        if "Rol_Tactico" in tabla.columns:
+            tabla["Pct (por rol)"] = tabla.groupby("Rol_Tactico")[m].rank(pct=True).mul(100).round(1)
+        # Percentil por competición (si existe)
+        if "Comp" in tabla.columns:
+            tabla["Pct (por comp)"] = tabla.groupby("Comp")[m].rank(pct=True).mul(100).round(1)
+
+        # Orden final de columnas
+        cols_ctx = [c for c in ["Rank", "Pct (muestra)", "Pct (por rol)", "Pct (por comp)"] if c in tabla.columns]
+        cols_show = cols_id + cols_ctx + cols_metrics
+
+        # Ordenar por métrica y cortar TopN
+        tabla = tabla.sort_values(m, ascending=False).head(topn)
+
+        # Redondeo + renombre para mostrar
         tabla_disp_num = round_numeric_for_display(tabla, ndigits=3)
         tabla_disp = rename_for_display(tabla_disp_num, cols_show)
 
     else:
-        st.caption('<div class="note">El índice ponderado normaliza cada métrica (0–1), aplica tu peso y combina. 100 = mejor del grupo.</div>', unsafe_allow_html=True)
+        st.caption(
+            '<div class="note">El índice ponderado normaliza cada métrica (0–1), '
+            'aplica tu peso y combina. 100 = mejor del grupo.</div>',
+            unsafe_allow_html=True
+        )
 
         # 1) Selección de métricas
         mm_feats = st.multiselect(
@@ -381,12 +407,12 @@ with tab_ranking:
 
         # 3) Índice ponderado
         X = dff_view[mm_feats].astype(float).copy()
-        # imputación simple para evitar NaN antes de normalizar
         for c in mm_feats:
             X[c] = X[c].fillna(X[c].median())
         Xn = (X - X.min()) / (X.max() - X.min() + 1e-9)
 
-        w = np.array([weights[f] for f in mm_feats], dtype=float)
+        import numpy as _np
+        w = _np.array([weights[f] for f in mm_feats], dtype=float)
         w = w / (w.sum() + 1e-9)
         score = (Xn.values @ w) * 100.0  # 0–100
 
@@ -400,28 +426,42 @@ with tab_ranking:
 
         # Redondeo y renombre
         tabla_disp_num = round_numeric_for_display(df_rank, ndigits=3)
-        # índice con 1 decimal
-        tabla_disp_num["Índice ponderado"] = pd.to_numeric(tabla_disp_num["Índice ponderado"], errors="coerce").round(1)
+        tabla_disp_num["Índice ponderado"] = pd.to_numeric(
+            tabla_disp_num["Índice ponderado"], errors="coerce"
+        ).round(1)
         cols_show = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age","Índice ponderado"] + mm_feats
         tabla_disp = rename_for_display(tabla_disp_num, cols_show)
 
     # -------- Render tabla (AgGrid si está disponible) --------
     try:
         from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode
+
         gb = GridOptionsBuilder.from_dataframe(tabla_disp)
-        gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
-        gb.configure_column(label("Player"), pinned="left", width=230)
-        gb.configure_column(label("Squad"), width=180)
-        gb.configure_column(label("Season"), width=120)
-        gb.configure_column(label("Rol_Tactico"), header_name=label("Rol_Tactico"), width=170)
-        gb.configure_column(label("Comp"), width=170)
-        gb.configure_column(label("Min"), width=110)
-        gb.configure_column(label("Age"), width=90)
+        gb.configure_default_column(
+            sortable=True, filter=True, resizable=True, floatingFilter=True,
+        )
+
+        # 👉 Columnas clave con ancho mínimo, texto envuelto y tooltip
+        gb.configure_column(label("Player"),  pinned="left", minWidth=260, wrapText=True, autoHeight=True,
+                            tooltipField=label("Player"))
+        gb.configure_column(label("Squad"),   minWidth=180, wrapText=True, autoHeight=True,
+                            tooltipField=label("Squad"))
+        gb.configure_column(label("Season"),  minWidth=120, tooltipField=label("Season"))
+        gb.configure_column(label("Rol_Tactico"), header_name=label("Rol_Tactico"),
+                            minWidth=170, wrapText=True, autoHeight=True, tooltipField=label("Rol_Tactico"))
+
+        # Si existe la columna de índice ponderado, fija un ancho
         if rank_mode != "Por una métrica":
-            gb.configure_column("Índice ponderado", width=160)
+            gb.configure_column("Índice ponderado", minWidth=140)
+
+        gb.configure_grid_options(
+            domLayout="normal",
+            enableBrowserTooltips=True,
+            rowHeight=36,
+        )
         gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=25)
         gb.configure_side_bar()
-        gb.configure_grid_options(domLayout="normal")
+
         grid_options = gb.build()
 
         AgGrid(
@@ -429,13 +469,14 @@ with tab_ranking:
             gridOptions=grid_options,
             theme="streamlit",
             update_mode=GridUpdateMode.NO_UPDATE,
-            columns_auto_size_mode=ColumnsAutoSizeMode.NO_AUTOSIZE,
+            # Auto-ajuste de columnas al contenido (el resto de columnas)
+            columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
             fit_columns_on_grid_load=False,
             height=580,
             allow_unsafe_jscode=False,
         )
     except Exception:
-        st.dataframe(tabla_disp, use_container_width=True)
+        st.dataframe(tabla_disp, use_container_width=True, hide_index=True)
 
     st.download_button(
         "⬇️ Descargar ranking (CSV)",
@@ -666,3 +707,4 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
