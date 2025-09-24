@@ -362,36 +362,61 @@ with tab_ranking:
     # Renombrar columnas SOLO para mostrar
     st.dataframe(rename_for_display(tabla, cols_show), use_container_width=True)
 
-# ===================== COMPARADOR ========================================
-with tab_compare:
+# ===================== RANKING ===========================================
+with tab_ranking:
     stop_if_empty(dff)
-    st.subheader("Comparador de jugadores (Radar)")
-    players = dff["Player"].dropna().unique().tolist()
-    cA, cB = st.columns(2)
-    p1 = cA.selectbox("Jugador A", players, index=0 if players else None, key="pA")
-    p2 = cB.selectbox("Jugador B", players, index=1 if len(players)>1 else 0, key="pB")
+    st.subheader("Ranking por métrica")
 
-    radar_feats = st.multiselect(
-        "Métricas para el radar (elige 4–8)",
+    # Mostrar nombres deportivos en el selector, pero devolver la columna real
+    metric_to_rank = st.selectbox(
+        "Métrica para ordenar",
         options=metrics_all,
-        default=metrics_all[:6],
-        key="feats",
+        index=0 if metrics_all else None,
         format_func=lambda c: label(c)
     )
+    topn = st.slider("Top N", 5, 100, 20)
 
-    def radar(df_in, pA, pB, feats):
-        S = df_in[feats].astype(float)
-        S = normalize_0_1(S)
-        A = S[df_in["Player"]==pA].mean(numeric_only=True).fillna(0)
-        B = S[df_in["Player"]==pB].mean(numeric_only=True).fillna(0)
-        fig = go.Figure()
-        fig.add_trace(go.Scatterpolar(r=A.values, theta=[label(f) for f in feats], fill="toself", name=p1))
-        fig.add_trace(go.Scatterpolar(r=B.values, theta=[label(f) for f in feats], fill="toself", name=p2))
-        fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0,1])), showlegend=True)
-        return fig
+    cols_show = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"] + metrics_all
+    tabla = dff[cols_show].sort_values(metric_to_rank, ascending=False).head(topn)
 
-    if p1 and p2 and radar_feats:
-        st.plotly_chart(radar(dff, p1, p2, radar_feats), use_container_width=True)
+    # Renombrar columnas SOLO para mostrar
+    tabla_disp = rename_for_display(tabla, cols_show)
+
+    # --- Intentar usar AgGrid para pin-left "Jugador"; si no está, fallback a st.dataframe ---
+    try:
+        from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode
+
+        # Construcción de opciones
+        gb = GridOptionsBuilder.from_dataframe(tabla_disp)
+        gb.configure_default_column(
+            sortable=True, filter=True, resizable=True, floatingFilter=True
+        )
+        # Pegar columna "Jugador" a la izquierda
+        gb.configure_column(label("Player"), pinned="left")
+        # Un poco de UX
+        gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=25)
+        gb.configure_side_bar()  # panel lateral de filtros/columns
+        gb.configure_grid_options(
+            rowHeight=28,
+            suppressMenuHide=False,
+            animateRows=True,
+            domLayout="autoHeight",
+        )
+        grid_options = gb.build()
+
+        AgGrid(
+            tabla_disp,
+            gridOptions=grid_options,
+            theme="streamlit",                # temas: "streamlit", "balham", "alpine", ...
+            update_mode=GridUpdateMode.NO_UPDATE,
+            columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
+            fit_columns_on_grid_load=False,   # ya fijamos auto size arriba
+            enable_enterprise_modules=False,
+        )
+
+    except Exception:
+        # Fallback si no está streamlit-aggrid instalado
+        st.dataframe(tabla_disp, use_container_width=True)
 
 # ===================== SIMILARES =========================================
 with tab_similarity:
@@ -449,4 +474,5 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
 
