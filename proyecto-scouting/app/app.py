@@ -414,11 +414,13 @@ with tab_ranking:
     # ===================== MODO: MULTI-MÉTRICA =====================
     else:
         st.caption(
-            '<div class="note">El índice ponderado normaliza cada métrica (0–1), '
-            'aplica tu peso y combina. 100 = mejor del grupo.</div>',
+            '<div class="note">Se muestran dos índices: '
+            '<b>Índice ponderado (0–100)</b> basado en métricas normalizadas, y '
+            '<b>Índice Final Métrica</b> que es la suma ponderada en valor crudo.</div>',
             unsafe_allow_html=True
         )
 
+        # 1) Selección de métricas
         mm_feats = st.multiselect(
             "Elige 3–12 métricas para construir el índice",
             options=metrics_all,
@@ -430,36 +432,48 @@ with tab_ranking:
             st.info("Selecciona al menos 3 métricas.")
             st.stop()
 
-        # Pesos
+        # 2) Pesos por métrica (0.0–2.0)
         weights = {}
-        with st.expander("⚖️ Pesos por métrica (0.5–3.0)", expanded=True):
+        with st.expander("⚖️ Pesos por métrica (0.0–2.0)", expanded=True):
             for f in mm_feats:
-                weights[f] = st.slider(label(f), 0.5, 3.0, 1.0, 0.1, key=f"rankw_{f}")
+                weights[f] = st.slider(label(f), 0.0, 2.0, 1.0, 0.1, key=f"rankw_{f}")
 
-        # Índice ponderado
+        # --- Preparación de datos
         X = dff_view[mm_feats].astype(float).copy()
+        # Imputación rápida por mediana para evitar NaN
         for c in mm_feats:
             X[c] = X[c].fillna(X[c].median())
+
+        # --- (A) Índice normalizado 0–100 (como ya tenías)
         Xn = (X - X.min()) / (X.max() - X.min() + 1e-9)
-
         import numpy as _np
-        w = _np.array([weights[f] for f in mm_feats], dtype=float)
-        w = w / (w.sum() + 1e-9)
-        score = (Xn.values @ w) * 100.0
+        w_vec = _np.array([weights[f] for f in mm_feats], dtype=float)
+        w_norm = w_vec / (w_vec.sum() + 1e-9)  # normalizamos pesos para el índice 0–100
+        idx_norm_0_100 = (Xn.values @ w_norm) * 100.0
 
+        # --- (B) NUEVO: Índice Final Métrica (suma ponderada cruda)
+        # suma_i (métrica_cruda_i * peso_i)
+        idx_final_metrica = (X.values @ w_vec)
+
+        # Construcción del DataFrame de salida
         df_rank = dff_view[["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]].copy()
+        # Adjuntamos las métricas usadas para inspección
         for f in mm_feats:
             df_rank[f] = dff_view[f].astype(float)
-        df_rank["Índice ponderado"] = score
+        df_rank["Índice ponderado"] = idx_norm_0_100
+        df_rank["Índice Final Métrica"] = idx_final_metrica
 
+        # Orden por defecto: Índice Final Métrica descendente (puedes cambiar clicando el header)
         topn = st.slider("Top N", 5, 200, 50, key="rank_topn_mm")
-        df_rank = df_rank.sort_values("Índice ponderado", ascending=False).head(topn)
+        df_rank = df_rank.sort_values("Índice Final Métrica", ascending=False).head(topn)
 
+        # Redondeo y renombre
         tabla_disp_num = round_numeric_for_display(df_rank, ndigits=3)
         tabla_disp_num["Índice ponderado"] = pd.to_numeric(
             tabla_disp_num["Índice ponderado"], errors="coerce"
         ).round(1)
-        cols_show = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age","Índice ponderado"] + mm_feats
+        cols_show = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age",
+                     "Índice ponderado", "Índice Final Métrica"] + mm_feats
         tabla_disp = rename_for_display(tabla_disp_num, cols_show)
 
     # -------- Render tabla (AgGrid si está disponible) --------
@@ -736,6 +750,7 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
 
 
 
