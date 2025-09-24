@@ -11,23 +11,17 @@ st.set_page_config(page_title="Scouting LaLiga", layout="wide")
 
 st.markdown("""
 <style>
+/* Títulos principales */
 .big-title {font-size:2.1rem; font-weight:800; margin:0 0 .25rem 0;}
 .subtle {color:#8A8F98; margin:0 0 1.0rem 0;}
 .kpi .stMetric {text-align:center}
 
-/* ==== Estilo del sidebar ==== */
-[data-testid="stSidebar"] .sidebar-title { 
-  font-size: 1.05rem; font-weight: 800; margin: .25rem 0 .5rem 0;
-}
-[data-testid="stSidebar"] label { 
-  font-size: .98rem; font-weight: 600;
-}
-[data-testid="stSidebar"] .stMultiSelect, 
-[data-testid="stSidebar"] .stSlider, 
-[data-testid="stSidebar"] .stNumberInput, 
-[data-testid="stSidebar"] .stRadio {
-  margin-bottom: .6rem;
-}
+/* Sidebar: tipografía y separación */
+div[data-testid="stSidebar"] * { font-size: 0.95rem; }
+div[data-testid="stSidebar"] label { font-weight: 600; }
+div[data-testid="stSidebar"] .stMultiSelect, 
+div[data-testid="stSidebar"] .stSlider,
+div[data-testid="stSidebar"] .stRadio { margin-bottom: .75rem; }
 </style>
 <div class="big-title"> Scouting Hub — Radar de rendimiento de las 5 grandes ligas</div>
 <p class="subtle">Análisis operativo para dirección deportiva: jugadores con ≥900′, métricas por 90’ y porcentajes (0–100). Filtros por competición, <b>rol táctico</b> y temporada.</p>
@@ -74,13 +68,11 @@ def round_numeric_for_display(df: pd.DataFrame, ndigits: int = 3) -> pd.DataFram
         out[num_cols] = out[num_cols].round(ndigits)
     return out
 
-# ---------- Nombres “deportivos” ----------
+# ---------- Nombres “deportivos” para métricas y campos ----------
 METRIC_LABELS = {
-    # Identidad / contexto
     "Player": "Jugador", "Squad": "Equipo", "Season": "Temporada",
     "Rol_Tactico": "Rol táctico", "Comp": "Competición", "Min": "Minutos", "Age": "Edad",
 
-    # Ofensivo / finalización
     "Gls_per90": "Goles por 90 (Gls_per90)",
     "xG_per90": "Goles esperados por 90 (xG_per90)",
     "NPxG_per90": "Goles esperados sin penaltis por 90 (NPxG_per90)",
@@ -88,7 +80,6 @@ METRIC_LABELS = {
     "SoT_per90": "Tiros a puerta por 90 (SoT_per90)",
     "G/SoT_per90": "Goles por tiro a puerta por 90 (G/SoT_per90)",
 
-    # Creatividad
     "xA_per90": "Asistencias esperadas por 90 (xA_per90)",
     "xAG_per90": "Asistencias + Goles esperados por 90 (xAG_per90)",
     "KP_per90": "Pases clave por 90 (KP_per90)",
@@ -97,30 +88,25 @@ METRIC_LABELS = {
     "1/3_per90": "Recuperaciones en último tercio por 90 (1/3_per90)",
     "PPA_per90": "Pases al área penal por 90 (PPA_per90)",
 
-    # Progresión
     "PrgP_per90": "Pases progresivos por 90 (PrgP_per90)",
     "PrgC_per90": "Conducciones progresivas por 90 (PrgC_per90)",
     "Carries_per90": "Conducciones por 90 (Carries_per90)",
     "TotDist_per90": "Distancia total por 90 (TotDist_per90)",
 
-    # Defensa
     "Tkl+Int_per90": "Entradas + Intercepciones por 90 (Tkl+Int_per90)",
     "Int_per90": "Intercepciones por 90 (Int_per90)",
     "Recov_per90": "Recuperaciones por 90 (Recov_per90)",
     "Blocks_per90": "Bloqueos por 90 (Blocks_per90)",
     "Clr_per90": "Despejes por 90 (Clr_per90)",
 
-    # Posesión / pérdidas / presión
     "Touches_per90": "Toques por 90 (Touches_per90)",
     "Dis_per90": "Pérdidas por 90 (Dis_per90)",
     "Pressures_per90": "Presiones por 90 (Pressures_per90)",
     "Err_per90": "Errores por 90 (Err_per90)",
 
-    # Pase
     "Cmp%": "Porcentaje Precisión de pase (Cmp%)",
     "Cmp_per90": "Pases completados por 90 (Cmp_per90)",
 
-    # Porteros
     "Save%": "Porcentajes de Paradas (Save%)",
     "PSxG+/-_per90": "Goles evitados por 90 (PSxG+/-_per90)",
     "PSxG_per90": "Calidad de tiros recibidos por 90 (PSxG_per90)",
@@ -139,10 +125,12 @@ def rename_for_display(df: pd.DataFrame, cols: list) -> pd.DataFrame:
     mapping = {c: label(c) for c in cols if c in df.columns}
     return df[cols].rename(columns=mapping)
 
-# ===================== Query params ======================
+# ===================== Query params (nueva API) ==========
 params = dict(st.query_params)
 def _to_list(v): return [] if v is None else (v if isinstance(v, list) else [v])
 
+player_pre = _to_list(params.get("player"))
+squad_pre  = _to_list(params.get("squad"))
 comp_pre   = _to_list(params.get("comp"))
 rol_pre    = _to_list(params.get("rol"))
 season_pre = _to_list(params.get("season"))
@@ -150,98 +138,91 @@ min_pre    = int(params.get("min", 900))
 age_from   = int(params.get("age_from", 15))
 age_to     = int(params.get("age_to", 40))
 
-# ===================== Filtros (orden solicitado) ========
-st.sidebar.markdown('<div class="sidebar-title">Filtros</div>', unsafe_allow_html=True)
+# ===================== Filtros (orden solicitado) ====================
+st.sidebar.header("Filtros")
 
-# 1) Jugador
+# 1) Jugador (con buscador)
 player_opts = sorted(df["Player"].dropna().unique())
-players_sel = st.sidebar.multiselect("Jugador", player_opts)
+player = st.sidebar.multiselect("Jugador", player_opts, default=player_pre)
 
-# 2) Equipo
+# 2) Equipo (con buscador)
 squad_opts = sorted(df["Squad"].dropna().unique())
-squads_sel = st.sidebar.multiselect("Equipo", squad_opts)
+squad = st.sidebar.multiselect("Equipo", squad_opts, default=squad_pre)
 
-# 3) Competición
+# 3) Competición (con buscador)
 comp_opts = sorted(df["Comp"].dropna().unique())
 comp = st.sidebar.multiselect("Competición", comp_opts, default=comp_pre)
 
-# 4) Temporada (con ámbito)
+# 4) Ámbito temporal / Temporada
 season_opts_all = sorted(df["Season"].dropna().unique(), key=_season_key)
 current_season = season_opts_all[-1] if season_opts_all else None
 
 scope = st.sidebar.radio(
-    "Temporada",
+    "Ámbito temporal",
     options=["Histórico (≥900′)", "Temporada en curso"],
     index=0,
 )
 
 if scope == "Histórico (≥900′)":
     default_hist = [s for s in season_opts_all if s != current_season] or season_opts_all
-    season = st.sidebar.multiselect("Selecciona temporada(s)", season_opts_all, default=default_hist)
+    season = st.sidebar.multiselect("Temporada (histórico)", season_opts_all, default=default_hist)
 else:
     season = [current_season] if current_season else []
-    st.sidebar.caption(f"Temporada actual: **{current_season or '—'}**")
+    st.sidebar.write(f"**Temporada en curso:** {current_season or '—'}")
 
 # 5) Rol táctico (posición)
-rol_opts  = sorted(df["Rol_Tactico"].dropna().unique())
-rol  = st.sidebar.multiselect("Rol táctico (posición)", rol_opts, default=rol_pre)
+rol_opts = sorted(df["Rol_Tactico"].dropna().unique())
+rol = st.sidebar.multiselect("Rol táctico (posición)", rol_opts, default=rol_pre)
 
-# 6) Edad (rango)
+# 6) Edad (rango) — solo slider
 age_num = pd.to_numeric(df.get("Age", pd.Series(dtype=float)), errors="coerce")
 if age_num.size:
     age_min, age_max = int(np.nanmin(age_num)), int(np.nanmax(age_num))
 else:
     age_min, age_max = 15, 40
 age_default = (max(age_min, age_from), min(age_max, age_to))
-age_range_slider = st.sidebar.slider("Edad (rango)", min_value=age_min, max_value=age_max,
-                                     value=age_default, key="age_slider")
-age_min_num = st.sidebar.number_input("Edad mínima", min_value=age_min, max_value=age_max,
-                                      value=int(age_range_slider[0]), step=1, key="age_min_num")
-age_max_num = st.sidebar.number_input("Edad máxima", min_value=age_min, max_value=age_max,
-                                      value=int(age_range_slider[1]), step=1, key="age_max_num")
-age_range = (int(min(age_min_num, age_max_num)), int(max(age_min_num, age_max_num)))
+age_range = st.sidebar.slider("Edad (rango)", min_value=age_min, max_value=age_max,
+                              value=age_default, key="age_slider_only")
 
-# 7) Minutos jugados (≥)
+# 7) Minutos jugados (≥) — solo slider
 if scope == "Histórico (≥900′)":
     global_min = max(900, int(df.get("Min", pd.Series([900])).min())) if "Min" in df else 900
     global_max = int(df.get("Min", pd.Series([3420])).max()) if "Min" in df else 3420
     default_min = int(np.clip(900, global_min, global_max))
-    min_sel_slider = st.sidebar.slider("Minutos jugados (≥)", min_value=global_min, max_value=global_max,
-                                       value=default_min, key="mins_slider_hist")
-    min_sel = st.sidebar.number_input("Escribir minutos (≥)", min_value=global_min, max_value=global_max,
-                                      value=int(min_sel_slider), step=30, key="mins_num_hist")
+    min_sel = st.sidebar.slider("Minutos jugados (≥)", min_value=global_min, max_value=global_max,
+                                value=default_min, key="mins_slider_hist_only")
 else:
     cur_df = df[df["Season"].isin(season)] if season else df
     cur_max = int(cur_df.get("Min", pd.Series([0])).max()) if not cur_df.empty else 0
     cur_default = min(90, cur_max) if cur_max else 0
-    min_sel_slider = st.sidebar.slider("Minutos jugados (≥)", min_value=0, max_value=cur_max,
-                                       value=int(cur_default), step=30, key="mins_slider_cur")
-    min_sel = st.sidebar.number_input("Escribir minutos (≥)", min_value=0, max_value=cur_max,
-                                      value=int(min_sel_slider), step=30, key="mins_num_cur")
+    min_sel = st.sidebar.slider("Minutos jugados (≥)", min_value=0, max_value=cur_max,
+                                value=int(cur_default), step=30, key="mins_slider_cur_only")
     if min_sel < 900:
         st.sidebar.caption("🔎 Estás viendo muestras <900′ (muestra parcial).")
 
 # --------- Construcción del subconjunto activo (dff_view) ----------
 mask_common = True
-if len(players_sel): mask_common &= df["Player"].isin(players_sel)
-if len(squads_sel):  mask_common &= df["Squad"].isin(squads_sel)
-if len(comp):        mask_common &= df["Comp"].isin(comp)
-if len(rol):         mask_common &= df["Rol_Tactico"].isin(rol)
-if len(season):      mask_common &= df["Season"].isin(season)
-if age_num.size:     mask_common &= age_num.between(age_range[0], age_range[1])
+if player: mask_common &= df["Player"].isin(player)
+if squad:  mask_common &= df["Squad"].isin(squad)
+if comp:   mask_common &= df["Comp"].isin(comp)
+if rol:    mask_common &= df["Rol_Tactico"].isin(rol)
+if season: mask_common &= df["Season"].isin(season)
+
+if "Age" in df:
+    age_series = pd.to_numeric(df["Age"], errors="coerce")
+    mask_common &= age_series.between(age_range[0], age_range[1])
 
 mask_minutes = (df["Min"] >= min_sel) if "Min" in df else True
 dff_view = df.loc[mask_common & mask_minutes].copy()
 
 # Persistir en URL
 st.query_params.update({
-    "comp": comp, "rol": rol, "season": season,
+    "player": player, "squad": squad, "comp": comp, "rol": rol, "season": season,
     "min": str(min_sel),
     "age_from": str(age_range[0]), "age_to": str(age_range[1]),
 })
 
 # ===================== Métricas ==========================
-gk_metrics = ["Save%", "PSxG+/-_per90", "PSxG_per90", "Saves_per90", "CS%", "Launch%"]
 out_metrics = [
     "Gls_per90","xG_per90","NPxG_per90","Sh_per90","SoT_per90","G/SoT_per90",
     "xA_per90","KP_per90","GCA90_per90","SCA_per90",
@@ -284,8 +265,6 @@ def render_overview_block(df_in):
             template="plotly_dark"
         )
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Faltan columnas xG_per90 / Gls_per90 en el subconjunto actual.")
 
     st.markdown("### Creación: **xA/90 vs Pases clave/90** (tamaño = GCA/90)")
     if all(c in df_in.columns for c in ["xA_per90","KP_per90","GCA90_per90"]):
@@ -361,6 +340,7 @@ with tab_ranking:
     cols_show = ["Player", "Squad", "Season", "Rol_Tactico", "Comp", "Min", "Age"] + metrics_all
     tabla = dff_view[cols_show].sort_values(metric_to_rank, ascending=False).head(topn)
 
+    # Redondeo a 3 decimales SOLO para mostrar y renombre para display
     tabla_disp_num = round_numeric_for_display(tabla, ndigits=3)
     tabla_disp = rename_for_display(tabla_disp_num, cols_show)
 
@@ -373,24 +353,24 @@ with tab_ranking:
         )
         gb = GridOptionsBuilder.from_dataframe(tabla_disp)
 
-        # Default column sin flex (para que respete width/minWidth)
-        gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True, flex=0)
+        # Default col
+        gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
 
-        # Anchos iniciales + minWidth y Jugador fijado
-        gb.configure_column(label("Player"), pinned="left", width=220, minWidth=220)
-        gb.configure_column(label("Squad"), width=160, minWidth=160)
-        gb.configure_column(label("Season"), width=120, minWidth=120)
-        gb.configure_column(label("Rol_Tactico"), header_name=label("Rol_Tactico"), width=170, minWidth=170)
-        gb.configure_column(label("Comp"), width=150, minWidth=150)
-        gb.configure_column(label("Min"), width=110, minWidth=110)
-        gb.configure_column(label("Age"), width=90, minWidth=90)
+        # ---- Anchos fijos y pin de Jugador ----
+        gb.configure_column(label("Player"), pinned="left", width=230)
+        gb.configure_column(label("Squad"), width=180)
+        gb.configure_column(label("Season"), width=120)
+        gb.configure_column(label("Rol_Tactico"), header_name=label("Rol_Tactico"), width=170)
+        gb.configure_column(label("Comp"), width=170)
+        gb.configure_column(label("Min"), width=110)
+        gb.configure_column(label("Age"), width=90)
 
         # Paginación + sidebar
         gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=25)
         gb.configure_side_bar()
 
-        # Que NO auto-encaje todo: dejamos scroll horizontal y mantenemos widths
-        gb.configure_grid_options(domLayout="normal", suppressHorizontalScroll=False)
+        # Evitar que el autosize nos aplaste los anchos definidos
+        gb.configure_grid_options(domLayout="normal")
 
         grid_options = gb.build()
 
@@ -399,13 +379,13 @@ with tab_ranking:
             gridOptions=grid_options,
             theme="streamlit",
             update_mode=GridUpdateMode.NO_UPDATE,
-            columns_auto_size_mode=ColumnsAutoSizeMode.NO_AUTOSIZE,  # <- respeta width/minWidth
+            columns_auto_size_mode=ColumnsAutoSizeMode.NO_AUTOSIZE,  # <- no tocar los anchos definidos
             fit_columns_on_grid_load=False,
             height=580,
             allow_unsafe_jscode=False,
         )
     except Exception:
-        st.info("Para fijar columna/anchos usa `streamlit-aggrid` en `requirements.txt`. Mostrando tabla estándar.")
+        st.info("Para fijar columnas y anchos usa `streamlit-aggrid` en `requirements.txt`. Mostrando tabla estándar.")
         st.dataframe(tabla_disp, use_container_width=True)
 
 # ===================== COMPARADOR ========================
@@ -489,7 +469,7 @@ with tab_shortlist:
         mime="text/csv",
     )
 
-# ===================== Footer ===========================
+# ===================== Footer trazabilidad ===============
 meta = next(DATA_DIR.glob("metadata_*.json"), None)
 if meta and meta.exists():
     import json
