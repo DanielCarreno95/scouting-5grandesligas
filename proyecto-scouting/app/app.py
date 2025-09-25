@@ -374,8 +374,9 @@ with tab_ranking:
     # Presets por rol (5 métricas clave por posición)
     ROLE_PRESETS = {
         "Delantero": ["Gls_per90", "xG_per90", "NPxG_per90", "SoT_per90", "xA_per90"],
-        "Interior":  ["xA_per90", "KP_per90", "GCA90_per90", "PrgP_per90", "SCA_per90"],
-        "Lateral":   ["PPA_per90", "PrgP_per90", "Carries_per90", "Tkl+Int_per90", "Int_per90"],
+        "Volante":  ["xA_per90", "KP_per90", "GCA90_per90", "PrgP_per90", "SCA_per90"],
+        "Mediocentro": ["xA_per90", "SoT_per90", "Pressures_per90", "Recov_per90", "TotDist_per90"],
+        "Lateral":   ["PPA_per90", "PrgP_per90", "Carries_per90", "Tkl+Int_per90", "1/3_per90"],
         "Central":   ["Tkl+Int_per90", "Int_per90", "Blocks_per90", "Clr_per90", "Recov_per90"],
         "Portero":   ["Save%", "PSxG+/-_per90", "PSxG_per90", "Saves_per90", "CS%"],
     }
@@ -816,6 +817,7 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
 
 
 
