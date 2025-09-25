@@ -351,7 +351,6 @@ with tab_ranking:
     # --- Compactar espaciados sólo en esta pestaña ---
     st.markdown("""
     <style>
-      /* reduce gap vertical de los contenedores dentro de esta sección */
       div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="stWidgetLabel"]) { margin-bottom: .25rem; }
       div[data-testid="stVerticalBlock"] { row-gap: .35rem !important; }
       div[data-testid="stHorizontalBlock"] { column-gap: .6rem !important; }
@@ -413,7 +412,6 @@ with tab_ranking:
     ]
     metrics_all = [m for m in out_metrics_all if m in df_base.columns]
 
-    # Presets por rol (5 métricas clave)
     ROLE_PRESETS = {
         "Portero":   ["Save%", "PSxG+/-_per90", "PSxG_per90", "Saves_per90", "CS%"],
         "Central":   ["Tkl+Int_per90", "Int_per90", "Blocks_per90", "Clr_per90", "Recov_per90"],
@@ -436,14 +434,6 @@ with tab_ranking:
     def _pct_series(s: pd.Series, lower_better: bool) -> pd.Series:
         p = s.rank(pct=True)
         return (1 - p) if lower_better else p
-
-    # ---------- Acciones arriba (limpiar + export) ----------
-    actL, actR = st.columns([0.5, 0.5])
-    with actL:
-        clear_pressed = st.button("🧹 Eliminar filtros", use_container_width=True)
-    with actR:
-        # placeholder; el CSV se rellenará tras construir `tabla_disp`
-        export_placeholder = st.empty()
 
     # ---------- Construcción según modo ----------
     tabla_disp = None
@@ -473,7 +463,7 @@ with tab_ranking:
         df_full = df_base[cols_id + cols_metrics].copy()
         df_full["Edad (U22/U28)"] = df_full["Age"].apply(_age_band)
 
-        # Percentiles (sin Rank, como pediste)
+        # Percentiles (sin Rank)
         df_full["Pct (muestra)"] = (_pct_series(df_full[metric_to_rank], lower_better)*100).round(1)
         if "Rol_Tactico" in df_full.columns:
             df_full["Pct (por rol)"] = df_full.groupby("Rol_Tactico")[metric_to_rank] \
@@ -482,11 +472,10 @@ with tab_ranking:
             df_full["Pct (por comp)"] = df_full.groupby("Comp")[metric_to_rank] \
                 .transform(lambda s: (_pct_series(s, lower_better)*100)).round(1)
 
-        # Orden base y total
+        # Orden y Top N
         df_full = df_full.sort_values(metric_to_rank, ascending=ascending)
         n_total_rows = len(df_full)
 
-        # Top N + Mostrar todos
         cL, cR = st.columns([0.7, 0.3])
         with cL:
             show_all = st.checkbox("Mostrar todos", value=False, key="rank_show_all")
@@ -516,7 +505,6 @@ with tab_ranking:
             unsafe_allow_html=True
         )
 
-        # Preset por rol en la misma fila (alineado con botón)
         col_p1, col_p2 = st.columns([0.8, 0.2])
         with col_p1:
             preset_sel = st.selectbox(
@@ -532,7 +520,6 @@ with tab_ranking:
                     st.session_state["mm_feats"] = preset_feats
                     st.success(f"Preset aplicado: {preset_sel} → {len(preset_feats)} métricas.")
 
-        # Selección de métricas
         mm_feats = st.multiselect(
             "Elige 3–12 métricas para construir el índice",
             options=metrics_all,
@@ -544,17 +531,15 @@ with tab_ranking:
             st.info("Selecciona al menos 3 métricas.")
             st.stop()
 
-        # Pesos 0.0–2.0
         weights = {}
         with st.expander("⚖️ Pesos por métrica (0.0–2.0)", expanded=True):
             for f in mm_feats:
                 weights[f] = st.slider(label(f), 0.0, 2.0, 1.0, 0.1, key=f"rankw_{f}")
 
-        # Datos y limpieza (optimizado: sin copias innecesarias)
-        X = df_base[mm_feats].astype(float)
-        X = X.fillna(X.median(numeric_only=True))
+        # Datos y limpieza (rápido)
+        X = df_base[mm_feats].astype(float).fillna(df_base[mm_feats].median(numeric_only=True))
 
-        # Índice 0–100 y crudo
+        # Índices
         Xn = (X - X.min()) / (X.max() - X.min() + 1e-9)
         import numpy as _np
         w_vec = _np.array([weights[f] for f in mm_feats], dtype=float)
@@ -564,16 +549,13 @@ with tab_ranking:
 
         df_rank = df_base[["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]].copy()
         df_rank["Edad (U22/U28)"] = df_rank["Age"].apply(_age_band)
-        for f in mm_feats:
-            df_rank[f] = df_base[f].astype(float)
+        for f in mm_feats: df_rank[f] = df_base[f].astype(float)
         df_rank["Índice ponderado"] = idx_norm_0_100
         df_rank["Índice Final Métrica"] = idx_final_metrica
 
-        # Orden base y total
         df_rank = df_rank.sort_values("Índice ponderado", ascending=False)
         n_total_rows = len(df_rank)
 
-        # Top N + Mostrar todos
         cL, cR = st.columns([0.7, 0.3])
         with cL:
             show_all = st.checkbox("Mostrar todos", value=False, key="rank_show_all")
@@ -596,17 +578,20 @@ with tab_ranking:
                      "Índice ponderado", "Índice Final Métrica"] + mm_feats
         tabla_disp = rename_for_display(tabla_disp_num, cols_show)
 
-    # ---------- Export CSV (botón superior) ----------
-    export_placeholder.download_button(
-        "⬇️ Exportar ranking (CSV)",
-        data=tabla_disp.to_csv(index=False).encode("utf-8-sig"),
-        file_name="ranking_scouting.csv",
-        mime="text/csv",
-        use_container_width=True,
-        key="rank_dl_top"
-    )
+    # ---------- Botones justo antes de la tabla ----------
+    btnL, btnR = st.columns([0.5, 0.5])
+    with btnL:
+        clear_pressed = st.button("🧹 Eliminar filtros", use_container_width=True, key="rank_clear_top")
+    with btnR:
+        st.download_button(
+            "⬇️ Exportar ranking (CSV)",
+            data=tabla_disp.to_csv(index=False).encode("utf-8-sig"),
+            file_name="ranking_scouting.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="rank_dl_top"
+        )
 
-    # ---------- Clear filters ----------
     if clear_pressed:
         for k in [
             "Jugador", "Equipo", "Competición", "Rol táctico (posición)",
@@ -620,9 +605,22 @@ with tab_ranking:
         st.query_params.clear()
         st.rerun()
 
-    # ---------- Tabla (AgGrid con heatmap en percentiles/índice) ----------
+    # ---------- Tabla (AgGrid con heatmap real) ----------
     try:
         from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode, JsCode
+
+        # Detectar columnas para heatmap tras renombrado
+        heat_cols = [c for c in tabla_disp.columns if c.startswith("Pct (")]
+        if "Índice ponderado" in tabla_disp.columns:
+            heat_cols.append("Índice ponderado")
+
+        # Asegurar tipo numérico en columnas de heatmap (por si vinieran como 'object')
+        for c in heat_cols:
+            if c in tabla_disp.columns:
+                try:
+                    tabla_disp[c] = pd.to_numeric(tabla_disp[c], errors="coerce")
+                except Exception:
+                    pass
 
         gb = GridOptionsBuilder.from_dataframe(tabla_disp)
         gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
@@ -637,24 +635,22 @@ with tab_ranking:
         if "Edad (U22/U28)" in tabla_disp.columns:
             gb.configure_column("Edad (U22/U28)", minWidth=80)
 
-        # Heatmap en columnas de percentil e índice
-        heat_cols = [c for c in tabla_disp.columns if c.startswith("Pct (")]
-        if "Índice ponderado" in tabla_disp.columns:
-            heat_cols.append("Índice ponderado")
-
+        # Heatmap verde (mejor) → rojo (peor)
         heat_js = JsCode("""
             function(params) {
                 var v = Number(params.value);
                 if (isNaN(v)) { return {}; }
+                // clamp 0..100
                 var p = Math.max(0, Math.min(100, v));
-                var hue = p * 1.2; // 0..120 rojo->verde
-                return {'backgroundColor': 'hsl(' + hue + ', 55%, 28%)', 'color': 'white'};
+                // 0=rojo, 50=amarillo, 100=verde
+                var hue = p * 1.2;  // 0..120
+                return {'backgroundColor': 'hsl(' + hue + ', 65%, 32%)', 'color': 'white'};
             }
         """)
         for c in heat_cols:
             gb.configure_column(c, cellStyle=heat_js)
 
-        # Zebra suave + rendimiento
+        # Zebra y opciones
         zebra_js = JsCode("""
             function(params) {
               if (params.node && params.node.rowIndex % 2 === 0) {
@@ -871,5 +867,6 @@ with tab_shortlist:
         file_name="shortlist_scouting.csv",
         mime="text/csv",
     )
+
 
 
