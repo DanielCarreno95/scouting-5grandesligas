@@ -340,12 +340,11 @@ active_tab = st.radio(
 )
 
 # ===================== OVERVIEW ==========================
-if active_tab == "📊 Overview":
+with tab_overview:
     stop_if_empty(dff_view)
     render_overview_block(dff_view)
-
 # ===================== RANKING ===========================
-elif active_tab == "🏆 Ranking":
+with tab_ranking:
     stop_if_empty(dff_view)
     st.subheader("Ranking por métrica")
 
@@ -390,13 +389,13 @@ elif active_tab == "🏆 Ranking":
     # Presets por rol (5 métricas clave por posición)
     ROLE_PRESETS = {
         "Delantero": ["Gls_per90", "xG_per90", "NPxG_per90", "SoT_per90", "xA_per90"],
-        "Volante":  ["xA_per90", "KP_per90", "GCA90_per90", "PrgP_per90", "SCA_per90"],
-        "Mediocentro": ["xA_per90", "SoT_per90", "Pressures_per90", "Recov_per90", "TotDist_per90"],
-        "Lateral":   ["PPA_per90", "PrgP_per90", "Carries_per90", "Tkl+Int_per90", "1/3_per90"],
+        "Interior":  ["xA_per90", "KP_per90", "GCA90_per90", "PrgP_per90", "SCA_per90"],
+        "Lateral":   ["PPA_per90", "PrgP_per90", "Carries_per90", "Tkl+Int_per90", "Int_per90"],
         "Central":   ["Tkl+Int_per90", "Int_per90", "Blocks_per90", "Clr_per90", "Recov_per90"],
         "Portero":   ["Save%", "PSxG+/-_per90", "PSxG_per90", "Saves_per90", "CS%"],
     }
 
+    # Utilidad: banda de edad
     def _age_band(x):
         try:
             a = float(x)
@@ -429,7 +428,7 @@ elif active_tab == "🏆 Ranking":
             "Top N", 5, max(100, min(1000, len(df_base))), 100, key="rank_topn"
         )
 
-        LOWER_IS_BETTER = {"Err_per90", "Dis_per90"}
+        LOWER_IS_BETTER = {"Err_per90", "Dis_per90"}  # añade aquí otras si procede
         lower_better = metric_to_rank in LOWER_IS_BETTER
 
         def pct_series(s: pd.Series, lower_better: bool) -> pd.Series:
@@ -535,24 +534,25 @@ elif active_tab == "🏆 Ranking":
         tabla_disp = rename_for_display(tabla_disp_num, cols_show)
 
     # ---------- Botón ELIMINAR FILTROS (al final de los filtros) ----------
-    st.markdown("<hr style='opacity:0.15; margin-top:.5rem;'>", unsafe_allow_html=True)
-    cols_tools = st.columns([1,1,1,1,2])
-    with cols_tools[-2]:
-        clear_pressed = st.button("🧹 Eliminar filtros", use_container_width=True)
-        if clear_pressed:
-            for k in [
-                "Jugador", "Equipo", "Competición", "Rol táctico (posición)",
-                "Edad (rango)", "Ámbito temporal", "Temporada (histórico)",
-                "mins_slider_hist_only", "mins_slider_cur_only", "age_slider_only",
-                "rank_mode", "rank_metric", "rank_order", "rank_topn",
-                "rank_topn_mm", "mm_feats", "mm_preset", "quick_age_rank",
-                "rank_show_all"
-            ]:
-                st.session_state.pop(k, None)
-            st.query_params.clear()
-            st.rerun()
+    st.markdown("<hr style='opacity:0.15;'>", unsafe_allow_html=True)
+    clear_pressed = st.button("🧹 Eliminar filtros", use_container_width=True)
+    if clear_pressed:
+        # limpia los principales controles del sidebar y ranking
+        for k in [
+            # sidebar (keys por defecto suelen ser etiquetas)
+            "Jugador", "Equipo", "Competición", "Rol táctico (posición)",
+            "Edad (rango)", "Ámbito temporal", "Temporada (histórico)",
+            "mins_slider_hist_only", "mins_slider_cur_only", "age_slider_only",
+            # ranking
+            "rank_mode", "rank_metric", "rank_order", "rank_topn",
+            "rank_topn_mm", "mm_feats", "mm_preset", "quick_age_rank",
+            "rank_show_all"
+        ]:
+            st.session_state.pop(k, None)
+        st.query_params.clear()
+        st.rerun()
 
-    # ---------- Render tabla (AgGrid con selección + heatmap) ----------
+    # ---------- Render tabla (AgGrid con heatmap) ----------
     try:
         from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode, JsCode
 
@@ -568,10 +568,6 @@ elif active_tab == "🏆 Ranking":
                             minWidth=170, wrapText=True, autoHeight=True, tooltipField=label("Rol_Tactico"))
         if "Edad (U22/U28)" in tabla_disp.columns:
             gb.configure_column("Edad (U22/U28)", minWidth=90)
-
-        # Selección de filas para enviar al comparador
-        gb.configure_selection(selection_mode="multiple", use_checkbox=True)
-        gb.configure_grid_options(rowSelection="multiple", suppressRowClickSelection=True)
 
         # Heatmap (percentiles + índice 0–100)
         heat_cols = [c for c in tabla_disp.columns if c.startswith("Pct (")] + \
@@ -593,59 +589,27 @@ elif active_tab == "🏆 Ranking":
         gb.configure_side_bar()
 
         grid_options = gb.build()
-        grid_resp = AgGrid(
+        AgGrid(
             tabla_disp,
             gridOptions=grid_options,
             theme="streamlit",
-            update_mode=GridUpdateMode.MODEL_CHANGED,
+            update_mode=GridUpdateMode.NO_UPDATE,
             columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
             fit_columns_on_grid_load=False,
             height=580,
             allow_unsafe_jscode=True,
         )
-
-        sel = grid_resp.get("selected_rows", [])
-
-        # Acciones alineadas: botón de export (cabecera) y enviar al comparador
-        hdr_left, hdr_sp, hdr_right = st.columns([1,6,1])
-        with hdr_right:
-            st.download_button(
-                "⬇️ CSV",
-                data=tabla_disp.to_csv(index=False).encode("utf-8-sig"),
-                file_name="ranking_scouting.csv",
-                mime="text/csv",
-                key="rank_dl_top"
-            )
-
-        st.markdown("<div style='height:.25rem'></div>", unsafe_allow_html=True)
-        act_c1, act_c2 = st.columns([1,4])
-        with act_c1:
-            if st.button("➕ Enviar al comparador", use_container_width=True, disabled=(len(sel)==0)):
-                player_key = label("Player")  # suele ser "Jugador"
-                picked = [r.get(player_key) for r in sel if r.get(player_key)]
-                st.session_state["cmp_players"] = picked[:3]                 # preselección (máx. 3)
-                st.session_state["active_tab"] = "🆚 Comparador"             # 🚀 saltar al comparador
-                st.query_params.update({"tab": "🆚 Comparador"})             # persistir en URL
-                st.rerun()
-
-        # Repetimos export en el pie de tabla (conveniencia)
-        st.download_button(
-            "⬇️ Descargar ranking (CSV)",
-            data=tabla_disp.to_csv(index=False).encode("utf-8-sig"),
-            file_name="ranking_scouting.csv",
-            mime="text/csv",
-            key="rank_dl_bottom"
-        )
-
     except Exception:
         st.dataframe(tabla_disp, use_container_width=True, hide_index=True)
-        st.download_button(
-            "⬇️ Descargar ranking (CSV)",
-            data=tabla_disp.to_csv(index=False).encode("utf-8-sig"),
-            file_name="ranking_scouting.csv",
-            mime="text/csv",
-            key="rank_dl_fallback"
-        )
+
+    st.download_button(
+        "⬇️ Descargar ranking (CSV)",
+        data=tabla_disp.to_csv(index=False).encode("utf-8-sig"),
+        file_name="ranking_scouting.csv",
+        mime="text/csv",
+        key="rank_dl"
+    )
+
 
 # ===================== COMPARADOR (sin pesos) ===========================
 elif active_tab == "🆚 Comparador":
@@ -1067,6 +1031,7 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
 
 
 
