@@ -606,79 +606,69 @@ with tab_ranking:
         st.rerun()
 
     # ---------- BLOQUE 6 · Render tabla (AgGrid) ----------
-    try:
-        from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode, JsCode
+try:
+    from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode, JsCode
 
-        gb = GridOptionsBuilder.from_dataframe(tabla_disp)
-        gb.configure_default_column(
-            sortable=True, filter=True, resizable=True, floatingFilter=True
-        )
-
-        # columnas clave
-        gb.configure_column(label("Player"), pinned="left", minWidth=260,
-                            wrapText=True, autoHeight=True, tooltipField=label("Player"))
-        gb.configure_column(label("Squad"),  minWidth=180, wrapText=True, autoHeight=True,
-                            tooltipField=label("Squad"))
-        gb.configure_column(label("Season"), minWidth=110, tooltipField=label("Season"))
-        gb.configure_column(label("Rol_Tactico"), header_name=label("Rol_Tactico"),
-                            minWidth=160, wrapText=True, autoHeight=True, tooltipField=label("Rol_Tactico"))
-        if "Edad (U22/U28)" in tabla_disp.columns:
-            gb.configure_column("Edad (U22/U28)", minWidth=90)
-
-        # Zebra suave mediante JS
-        zebra_js = JsCode("""
-            function(params) {
-              if (params.node && params.node.rowIndex % 2 === 0) {
-                return {'backgroundColor': 'rgba(255,255,255,0.02)'};
-              }
-              return {};
-            }
-        """)
-        gb.configure_grid_options(getRowStyle=zebra_js, enableBrowserTooltips=True, rowHeight=36)
-
-        # Heatmap en percentiles / índice
-        heat_cols = [c for c in tabla_disp.columns if c.startsWith?.('Pct (')) \
-                    if False else [c for c in tabla_disp.columns if c.startswith('Pct (')]
-        if "Índice ponderado" in tabla_disp.columns:
-            heat_cols += ["Índice ponderado"]
-
-        heat_js = JsCode("""
-            function(params) {
-                var v = Number(params.value);
-                if (isNaN(v)) { return {}; }
-                var p = Math.max(0, Math.min(100, v));
-                var hue = p * 1.2; // 0..120 (rojo->verde)
-                return {'backgroundColor': 'hsl(' + hue + ', 55%, 28%)', 'color': 'white'};
-            }
-        """)
-        for c in heat_cols:
-            gb.configure_column(c, cellStyle=heat_js)
-
-        gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=25)
-        gb.configure_side_bar()
-        grid_options = gb.build()
-
-        AgGrid(
-            tabla_disp,
-            gridOptions=grid_options,
-            theme="streamlit",
-            update_mode=GridUpdateMode.NO_UPDATE,
-            columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
-            fit_columns_on_grid_load=False,
-            height=580,
-            allow_unsafe_jscode=True,
-        )
-    except Exception:
-        st.dataframe(tabla_disp, use_container_width=True, hide_index=True)
-
-    # Footer export
-    st.download_button(
-        "⬇️ Exportar ranking (CSV)",
-        data=tabla_disp.to_csv(index=False).encode("utf-8-sig"),
-        file_name="ranking_scouting.csv",
-        mime="text/csv",
-        key="rank_dl_bottom"
+    gb = GridOptionsBuilder.from_dataframe(tabla_disp)
+    gb.configure_default_column(
+        sortable=True, filter=True, resizable=True, floatingFilter=True
     )
+
+    # columnas clave
+    gb.configure_column(label("Player"), pinned="left", minWidth=260,
+                        wrapText=True, autoHeight=True, tooltipField=label("Player"))
+    gb.configure_column(label("Squad"),  minWidth=180, wrapText=True, autoHeight=True,
+                        tooltipField=label("Squad"))
+    gb.configure_column(label("Season"), minWidth=110, tooltipField=label("Season"))
+    gb.configure_column(label("Rol_Tactico"), header_name=label("Rol_Tactico"),
+                        minWidth=160, wrapText=True, autoHeight=True, tooltipField=label("Rol_Tactico"))
+    if "Edad (U22/U28)" in tabla_disp.columns:
+        gb.configure_column("Edad (U22/U28)", minWidth=90)
+
+    # Zebra suave
+    zebra_js = JsCode("""
+        function(params) {
+          if (params.node && params.node.rowIndex % 2 === 0) {
+            return {'backgroundColor': 'rgba(255,255,255,0.02)'};
+          }
+          return {};
+        }
+    """)
+    gb.configure_grid_options(getRowStyle=zebra_js, enableBrowserTooltips=True, rowHeight=36)
+
+    # Heatmap en percentiles / índice (corregido)
+    heat_cols = [c for c in tabla_disp.columns if c.startswith("Pct (")]
+    if "Índice ponderado" in tabla_disp.columns:
+        heat_cols.append("Índice ponderado")
+
+    heat_js = JsCode("""
+        function(params) {
+            var v = Number(params.value);
+            if (isNaN(v)) { return {}; }
+            var p = Math.max(0, Math.min(100, v));
+            var hue = p * 1.2; // 0..120 (rojo->verde)
+            return {'backgroundColor': 'hsl(' + hue + ', 55%, 28%)', 'color': 'white'};
+        }
+    """)
+    for c in heat_cols:
+        gb.configure_column(c, cellStyle=heat_js)
+
+    gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=25)
+    gb.configure_side_bar()
+    grid_options = gb.build()
+
+    AgGrid(
+        tabla_disp,
+        gridOptions=grid_options,
+        theme="streamlit",
+        update_mode=GridUpdateMode.NO_UPDATE,
+        columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
+        fit_columns_on_grid_load=False,
+        height=580,
+        allow_unsafe_jscode=True,
+    )
+except Exception:
+    st.dataframe(tabla_disp, use_container_width=True, hide_index=True)
 
 # ===================== COMPARADOR (sin pesos) ===========================
 elif active_tab == "🆚 Comparador":
@@ -1100,6 +1090,7 @@ if meta and meta.exists():
     st.caption(f"📦 Dataset: {m.get('files',{}).get('parquet','parquet')} · "
                f"Filtros base: ≥{m.get('filters',{}).get('minutes_min',900)}′ · "
                f"Generado: {m.get('created_at','')}")
+
 
 
 
