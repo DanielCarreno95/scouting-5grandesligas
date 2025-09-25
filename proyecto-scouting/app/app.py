@@ -248,6 +248,96 @@ def stop_if_empty(dfx):
                    "Prueba a reducir el umbral de minutos, ampliar edades o seleccionar más roles/temporadas.")
         st.stop()
 
+# --------- Overview (FUNCIÓN) ----------
+def render_overview_block(df_in: pd.DataFrame) -> None:
+    k1, k2, k3, k4 = st.columns(4, gap="large")
+    with k1:
+        st.metric("Jugadores (en filtro)", f"{len(df_in):,}")
+    with k2:
+        st.metric("Equipos (en filtro)", f"{df_in['Squad'].nunique()}")
+    with k3:
+        try:
+            st.metric("Media de edad (en filtro)", f"{pd.to_numeric(df_in['Age'], errors='coerce').mean():.1f}")
+        except Exception:
+            st.metric("Media de edad (en filtro)", "—")
+    with k4:
+        med = int(df_in["Min"].median()) if "Min" in df_in and len(df_in) else 0
+        st.metric("Minutos medianos (en filtro)", f"{med:,}")
+
+    st.markdown("### Productividad ofensiva: **xG/90 vs Goles/90**")
+    if all(c in df_in.columns for c in ["xG_per90","Gls_per90"]):
+        fig = px.scatter(
+            df_in, x="xG_per90", y="Gls_per90",
+            color="Rol_Tactico",
+            size=df_in.get("SoT_per90", None),
+            hover_name="Player",
+            labels=labels_for(["xG_per90","Gls_per90","Rol_Tactico","SoT_per90"]),
+            template="plotly_dark"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("### Creación: **xA/90 vs Pases clave/90** (tamaño = GCA/90)")
+    if all(c in df_in.columns for c in ["xA_per90","KP_per90","GCA90_per90"]):
+        fig = px.scatter(
+            df_in, x="xA_per90", y="KP_per90",
+            size="GCA90_per90",
+            color="Rol_Tactico",
+            hover_name="Player",
+            labels=labels_for(["xA_per90","KP_per90","GCA90_per90","Rol_Tactico"]),
+            template="plotly_dark"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("### Progresión: **Top 15** en Pases progresivos por 90")
+    if "PrgP_per90" in df_in.columns:
+        top_prog = df_in.sort_values("PrgP_per90", ascending=False).head(15)
+        fig = px.bar(
+            top_prog.sort_values("PrgP_per90"),
+            x="PrgP_per90", y="Player",
+            color="Rol_Tactico",
+            labels=labels_for(["PrgP_per90","Player","Rol_Tactico"]),
+            template="plotly_dark",
+            orientation="h"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("### Defensa: **Tkl+Int/90 vs Recuperaciones/90** (tamaño = Intercepciones/90)")
+    if all(c in df_in.columns for c in ["Tkl+Int_per90","Recov_per90","Int_per90"]):
+        fig = px.scatter(
+            df_in, x="Tkl+Int_per90", y="Recov_per90",
+            size="Int_per90",
+            color="Rol_Tactico",
+            hover_name="Player",
+            labels=labels_for(["Tkl+Int_per90","Recov_per90","Int_per90","Rol_Tactico"]),
+            template="plotly_dark"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("### Pase: **Precisión** vs **Volumen**")
+    if all(c in df_in.columns for c in ["Cmp%","Cmp_per90"]):
+        fig = px.scatter(
+            df_in, x="Cmp%", y="Cmp_per90",
+            color="Rol_Tactico",
+            hover_name="Player",
+            labels=labels_for(["Cmp%","Cmp_per90","Rol_Tactico"]),
+            template="plotly_dark"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    if "Save%" in df_in.columns and "PSxG+/-_per90" in df_in.columns and "Saves_per90" in df_in.columns:
+        gk_df = df_in[df_in["Rol_Tactico"].str.contains("GK|Portero", case=False, na=False)].copy()
+        if len(gk_df):
+            st.markdown("### Porteros: **% Paradas** vs **PSxG+/- por 90** (tamaño = Paradas/90)")
+            fig = px.scatter(
+                gk_df, x="Save%", y="PSxG+/-_per90",
+                size="Saves_per90",
+                hover_name="Player",
+                color="Rol_Tactico",
+                labels=labels_for(["Save%","PSxG+/-_per90","Saves_per90","Rol_Tactico"]),
+                template="plotly_dark"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
 # ===================== OVERVIEW ==========================
 with tab_overview:
     stop_if_empty(dff_view)
@@ -771,3 +861,4 @@ with tab_shortlist:
         file_name="shortlist_scouting.csv",
         mime="text/csv",
     )
+
