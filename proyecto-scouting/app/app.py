@@ -883,31 +883,7 @@ with tab_similarity:
       .sim-badge {display:inline-block;padding:.1rem .4rem;border-radius:.4rem;background:#1f2a37;color:#cdd6e3;font-size:.75rem;margin-left:.35rem}
     </style>
     """, unsafe_allow_html=True)
-
-
-
-    GK_METRICS = [
-        "Save%","PSxG+/-_per90","PSxG_per90","Saves_per90","CS%","Launch%"
-    ]
-    FP_METRICS = [
-        "Gls_per90","xG_per90","NPxG_per90","Sh_per90","SoT_per90","G/SoT_per90",
-        "xA_per90","KP_per90","GCA90_per90","SCA_per90",
-        "PrgP_per90","PrgC_per90","Carries_per90","TotDist_per90",
-        "Tkl+Int_per90","Int_per90","Recov_per90","Blocks_per90","Clr_per90",
-        "Touches_per90","Dis_per90","Pressures_per90","Err_per90",
-        "Cmp%","Cmp_per90","1/3_per90","PPA_per90"
-    ]
-
-
-
-
-
-
-
-
-
         
-
     # ---------- Presets por rol (reutiliza los 5 de Ranking) ----------
     ROLE_PRESETS = {
         "Portero":   ["Save%", "PSxG+/-_per90", "PSxG_per90", "Saves_per90", "CS%", "Cmp_per90", "Err_per90"],
@@ -1140,6 +1116,7 @@ with tab_shortlist:
         file_name="shortlist_scouting.csv",
         mime="text/csv",
     )
+
 
 
 
