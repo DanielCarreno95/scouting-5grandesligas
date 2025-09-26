@@ -667,7 +667,7 @@ with tab_ranking:
         gb = GridOptionsBuilder.from_dataframe(tabla_disp)
         gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
 
-        # claves legibles primero
+        # columnas clave
         gb.configure_column(label("Player"), pinned="left", minWidth=260,
                             wrapText=True, autoHeight=True, tooltipField=label("Player"))
         gb.configure_column(label("Squad"),  minWidth=180, wrapText=True, autoHeight=True,
@@ -689,8 +689,7 @@ with tab_ranking:
         """)
         gb.configure_grid_options(getRowStyle=zebra_js, enableBrowserTooltips=True, rowHeight=36)
 
-        # Heatmap: percentiles o índice ponderado
-        heat_cols = [c for c in tabla_disp.columns if c.startsWith ? false : false]  # placeholder (no usar)
+        # Heatmap: percentiles e índice ponderado
         heat_cols = [c for c in tabla_disp.columns if c.startswith("Pct (")]
         if "Índice ponderado" in tabla_disp.columns:
             heat_cols.append("Índice ponderado")
@@ -699,7 +698,7 @@ with tab_ranking:
             function(params) {
                 var v = Number(params.value);
                 if (isNaN(v)) { return {}; }
-                // suponemos escala 0-100 (percentiles/índice)
+                // asumimos escala 0–100 (percentiles/índice)
                 var p = Math.max(0, Math.min(100, v));
                 var hue = p * 1.2; // 0..120 (rojo->verde)
                 return {'backgroundColor': 'hsl(' + hue + ', 55%, 28%)', 'color': 'white'};
@@ -724,6 +723,7 @@ with tab_ranking:
         )
     except Exception:
         st.dataframe(tabla_disp, use_container_width=True, hide_index=True)
+
 
 # ===================== COMPARADOR (sin pesos) ===========================
 with tab_compare:
@@ -915,6 +915,7 @@ with tab_shortlist:
         file_name="shortlist_scouting.csv",
         mime="text/csv",
     )
+
 
 
 
