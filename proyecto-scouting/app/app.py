@@ -869,7 +869,7 @@ with tab_compare:
     c.markdown('</div>', unsafe_allow_html=True)
 
 
-# ===================== SIMILARES (1 jugador + pesos + orden KPI→Filtros→Tabla→Perfil) =====================
+# ===================== SIMILARES (10/10: búsqueda, 2 roles, layout tabla+perfil) =====================
 with tab_similarity:
     stop_if_empty(dff_view)
     st.subheader("Jugadores similares (cosine con ponderaciones)")
@@ -878,12 +878,12 @@ with tab_similarity:
     st.markdown("""
     <style>
       .block-container div[data-testid="stHorizontalBlock"] { row-gap:.25rem !important; }
-      .stSelectbox, .stMultiSelect, .stRadio, .stSlider, .stCheckbox, .stNumberInput { margin:.15rem 0 !important; }
+      .stSelectbox, .stMultiSelect, .stRadio, .stSlider, .stCheckbox, .stNumberInput, .stTextInput { margin:.15rem 0 !important; }
       .kpi-row .stMetric { text-align:center; }
     </style>
     """, unsafe_allow_html=True)
 
-    # ---------- Presets por rol (mismas 5 métricas) ----------
+    # ---------- Presets por rol (5 métricas clave) ----------
     ROLE_PRESETS = {
         "Portero":   ["Save%", "PSxG+/-_per90", "PSxG_per90", "Saves_per90", "CS%"],
         "Central":   ["Tkl+Int_per90", "Int_per90", "Blocks_per90", "Clr_per90", "Recov_per90"],
@@ -893,16 +893,23 @@ with tab_similarity:
         "Delantero":["Gls_per90", "xG_per90", "NPxG_per90", "SoT_per90", "xA_per90"],
     }
 
-    # ---------- Contenedores para ORDEN VISUAL ----------
-    kpi_container = st.container()       # (1) KPIs (se completan después de leer filtros)
-    st.markdown("<hr style='opacity:.12;margin:.35rem 0;'>", unsafe_allow_html=True)
-    # (2) Filtros + pesos
-    players_all = dff_view["Player"].dropna().unique().tolist()
-    ref_player = st.selectbox("Jugador objetivo", players_all, index=0, key="sim_ref_target")
+    # ---------- Contenedor KPIs (se pinta al final de filtros) ----------
+    kpi_container = st.container()
 
+    st.markdown("<hr style='opacity:.12;margin:.35rem 0;'>", unsafe_allow_html=True)
+
+    # ============ (2) FILTROS ============
+
+    # -- Jugador objetivo con búsqueda por texto + select --
+    players_all = sorted(dff_view["Player"].dropna().unique().tolist())
+    q = st.text_input("Buscar jugador objetivo", value="", placeholder="Escribe parte del nombre…", key="sim_ref_search")
+    _pool_for_search = [p for p in players_all if q.lower() in p.lower()] or players_all
+    ref_player = st.selectbox("Jugador objetivo", _pool_for_search, index=0, key="sim_ref_target")
+
+    # -- Rol 1: preset (define métricas) --
     col_p1, col_p2 = st.columns([0.70, 0.30])
     with col_p1:
-        preset_sel = st.selectbox("Rol táctico (preset opcional)", ["— (ninguno)"] + list(ROLE_PRESETS.keys()),
+        preset_sel = st.selectbox("Rol táctico (preset de métricas)", ["— (ninguno)"] + list(ROLE_PRESETS.keys()),
                                   index=0, key="sim_preset")
     with col_p2:
         if st.button("Aplicar preset de métricas", use_container_width=True):
@@ -911,25 +918,25 @@ with tab_similarity:
             st.success(f"Preset aplicado: {preset_sel} → {len(preset_feats)} métricas.")
             st.rerun()
 
-    # Selección de métricas (si hay preset, lo toma)
-    options_all = [c for c in dff_view.columns if c.endswith("_per90") or c in ["Cmp%","Save%"]]
-    feats_default = st.session_state.get("sim_feats", ROLE_PRESETS.get(preset_sel, []))
+    # -- Selección de métricas (si hay preset lo respeta) --
+    all_metric_opts = [c for c in dff_view.columns if c.endswith("_per90") or c in ["Cmp%","Save%"]]
+    feats_default = st.session_state.get("sim_feats", ROLE_PRESETS.get(preset_sel, [])) or all_metric_opts[:8]
     feats_sim = st.multiselect("Selecciona 6–12 métricas",
-                               options=options_all,
-                               default=(feats_default if feats_default else options_all[:8]),
+                               options=all_metric_opts,
+                               default=feats_default,
                                key="sim_feats",
                                format_func=lambda c: label(c))
     if len(feats_sim) < 6:
         st.info("Selecciona al menos 6 métricas para una similitud estable.")
         st.stop()
 
-    # Pesos por métrica
+    # -- Pesos --
     with st.expander("⚖️ Ponderaciones por métrica (0.0–2.0)", expanded=True):
         weights = {}
         for f in feats_sim:
             weights[f] = st.slider(label(f), 0.0, 2.0, 1.0, 0.1, key=f"sim_w_{f}")
 
-    # Normalización de métricas y filtros de fichabilidad
+    # -- Normalización / exclusiones / edad / minutos / TopN --
     fc1, fc2, fc3 = st.columns([1,1,1])
     ctx_mode = fc1.selectbox("Normalización de métricas",
                              ["Muestra filtrada", "Por rol táctico", "Por competición"],
@@ -942,9 +949,15 @@ with tab_similarity:
     band = fc5.selectbox("Banda de edad", ["Todas","U22 (≤22)","U28 (≤28)"], index=0)
     topn = fc6.slider("Top N resultados", 5, 100, 25)
 
+    # -- Rol 2: filtro de resultados (multiselección) --
+    role_options = sorted(dff_view.get("Rol_Tactico", pd.Series(dtype=str)).dropna().unique().tolist())
+    role_filter = st.multiselect("Filtrar resultados por rol táctico (opcional)", role_options, key="sim_role_filter")
+
     st.markdown("<hr style='opacity:.12;margin:.35rem 0;'>", unsafe_allow_html=True)
 
-    # ---------- Construcción de pool / normalización ----------
+    # ============ Cálculo de similitud ============
+
+    # Contexto para normalizar
     def _ctx_mask(df_in: pd.DataFrame) -> pd.Series:
         if ctx_mode == "Muestra filtrada":
             return pd.Series(True, index=df_in.index)
@@ -961,6 +974,7 @@ with tab_similarity:
     pool = dff_view[_ctx_mask(dff_view)].copy()
     stop_if_empty(pool)
 
+    # filtros de fichabilidad
     if "Min" in pool:
         pool = pool[pool["Min"].fillna(0) >= min_minutes]
     if band != "Todas" and "Age" in pool:
@@ -977,26 +991,28 @@ with tab_similarity:
         ref_comp = pool.loc[pool["Player"] == ref_player, "Comp"].iloc[0]
         pool = pool[pool["Comp"] != ref_comp]
 
+    # Filtro por rol (resultados)
+    if role_filter and "Rol_Tactico" in pool.columns:
+        pool = pool[pool["Rol_Tactico"].isin(role_filter)]
+
     stop_if_empty(pool)
 
-    # ---------- Normalización min-max + ponderaciones ----------
-    feats_sim = [f for f in feats_sim if f in pool.columns]  # seguridad
+    # Normalización min-max + pesos
+    feats_sim = [f for f in feats_sim if f in pool.columns]
     X_raw = pool[feats_sim].astype(float).copy()
     Xn = (X_raw - X_raw.min()) / (X_raw.max() - X_raw.min() + 1e-9)
     Xn = Xn.fillna(0.0)
 
     import numpy as _np
     w_vec = _np.array([weights[f] for f in feats_sim], dtype=float)
-    # Normalizamos pesos para que su suma no sesgue la escala
     w_norm = w_vec / (w_vec.sum() + 1e-9)
 
-    # Vector del objetivo
+    # Vector objetivo
     if any(pool["Player"] == ref_player):
         v = Xn[pool["Player"] == ref_player].mean(axis=0).to_numpy()
         pool_no_ref = pool[pool["Player"] != ref_player].copy()
         X_no_ref = Xn.loc[pool_no_ref.index].copy()
     else:
-        # Si el objetivo no está en el pool (por filtros), normalizamos desde los rangos del pool para su fila en dff_view
         base_row = dff_view[dff_view["Player"] == ref_player]
         if base_row.empty:
             st.warning("El jugador objetivo no está en el dataset visible.")
@@ -1007,20 +1023,20 @@ with tab_similarity:
         pool_no_ref = pool.copy()
         X_no_ref = Xn.copy()
 
-    # Ponderamos: (x * w) y similitud coseno en espacio ponderado
+    # Cosine ponderado
     v_w = v * w_norm
     V_unit = v_w / (_np.linalg.norm(v_w) + 1e-12)
     U = (X_no_ref.to_numpy() * w_norm)
     U_unit = U / (_np.linalg.norm(U, axis=1, keepdims=True) + 1e-12)
     sim = (U_unit @ V_unit)
 
-    # Contribuciones por-qué se parece (en ponderado)
-    contrib = U_unit * V_unit  # (n,d) cada fila * importancia del v
+    # Contribución top-3
+    contrib = U_unit * V_unit
     feat_labels = [label(f) for f in feats_sim]
     idx_top3 = _np.argsort(-contrib, axis=1)[:, :3]
     why3 = [", ".join([feat_labels[i] for i in idx_row]) for idx_row in idx_top3]
 
-    # ---------- (1) KPIs (render arriba) ----------
+    # ============ (1) KPIs (arriba) ============
     with kpi_container:
         k1, k2, k3, k4 = st.columns(4, gap="small")
         k1.metric("Jugadores en pool", f"{len(pool):,}")
@@ -1028,70 +1044,76 @@ with tab_similarity:
         k3.metric("Edad media (pool)", f"{pd.to_numeric(pool['Age'], errors='coerce').mean():.1f}" if "Age" in pool else "—")
         k4.metric("Varianza media (métricas)", f"{float(Xn.var().mean()):.3f}")
 
-    # ---------- (3) Tabla de similares ----------
+    # ============ (3) Tabla + (4) Perfil en columnas ============
     st.markdown("### Resultados")
-    out_cols_id = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]
-    out = pool_no_ref[out_cols_id].copy()
-    out["similarity"] = sim
-    out["Top similitudes (3)"] = why3
-    out = out.sort_values("similarity", ascending=False).head(topn)
+    left, right = st.columns([0.62, 0.38], gap="large")
 
-    try:
-        from st_aggrid import AgGrid, GridOptionsBuilder, ColumnsAutoSizeMode, GridUpdateMode, JsCode
-        disp = round_numeric_for_display(out, ndigits=3)
-        disp = rename_for_display(disp, out_cols_id + ["similarity","Top similitudes (3)"])
-        gb = GridOptionsBuilder.from_dataframe(disp)
-        gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
-        gb.configure_column(label("Player"), pinned="left", minWidth=230, tooltipField=label("Player"))
-        heat_js = JsCode("""
-            function(params) {
-                var v = Number(params.value);
-                if (isNaN(v)) { return {}; }
-                v = Math.max(0, Math.min(1.0, v));
-                var hue = 120 * v; // 0->rojo, 120->verde
-                return {'backgroundColor':'hsl(' + hue + ', 65%, 30%)', 'color':'white'};
-            }
-        """)
-        gb.configure_column("similarity", cellStyle=heat_js, minWidth=120)
-        AgGrid(
-            disp, gridOptions=gb.build(),
-            theme="streamlit",
-            update_mode=GridUpdateMode.NO_UPDATE,
-            columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
-            height=460, allow_unsafe_jscode=True
+    # ---- Tabla izquierda (más baja) ----
+    with left:
+        out_cols_id = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]
+        out = pool_no_ref[out_cols_id].copy()
+        out["similarity"] = sim
+        out["Top similitudes (3)"] = why3
+        out = out.sort_values("similarity", ascending=False).head(topn)
+
+        try:
+            from st_aggrid import AgGrid, GridOptionsBuilder, ColumnsAutoSizeMode, GridUpdateMode, JsCode
+            disp = round_numeric_for_display(out, ndigits=3)
+            disp = rename_for_display(disp, out_cols_id + ["similarity","Top similitudes (3)"])
+            gb = GridOptionsBuilder.from_dataframe(disp)
+            gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
+            gb.configure_column(label("Player"), pinned="left", minWidth=230, tooltipField=label("Player"))
+            heat_js = JsCode("""
+                function(params) {
+                    var v = Number(params.value);
+                    if (isNaN(v)) { return {}; }
+                    v = Math.max(0, Math.min(1.0, v));
+                    var hue = 120 * v; // 0->rojo, 120->verde
+                    return {'backgroundColor':'hsl(' + hue + ', 65%, 30%)', 'color':'white'};
+                }
+            """)
+            gb.configure_column("similarity", cellStyle=heat_js, minWidth=120)
+            AgGrid(
+                disp, gridOptions=gb.build(),
+                theme="streamlit",
+                update_mode=GridUpdateMode.NO_UPDATE,
+                columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
+                height=420, allow_unsafe_jscode=True
+            )
+        except Exception:
+            st.dataframe(out, use_container_width=True, height=420, hide_index=True)
+
+        st.download_button(
+            "⬇️ Exportar similares (CSV)",
+            data=out.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"similares_{ref_player}.csv",
+            mime="text/csv",
+            key="sim_export_new"
         )
-    except Exception:
-        st.dataframe(out, use_container_width=True, hide_index=True)
 
-    st.download_button(
-        "⬇️ Exportar similares (CSV)",
-        data=out.to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"similares_{ref_player}.csv",
-        mime="text/csv",
-        key="sim_export_new"
-    )
+    # ---- Perfil derecha (Fortalezas / Debilidades) ----
+    with right:
+        st.markdown("### Perfil del objetivo (percentiles vs pool)")
+        ref_mask = (pool["Player"] == ref_player)
+        if ref_mask.any():
+            S = pool[feats_sim].astype(float)
+            pcts = S.rank(pct=True)
+            ref_pct = pcts[ref_mask].mean().sort_values(ascending=False)
+            top_str = ref_pct.head(5)
+            top_weak = ref_pct.tail(5)
 
-    # ---------- (4) Fortalezas / Debilidades del objetivo ----------
-    st.markdown("<hr style='opacity:.12;margin:.6rem 0;'>", unsafe_allow_html=True)
-    st.markdown("### Perfil del objetivo (percentiles vs pool)")
-    ref_mask = (pool["Player"] == ref_player)
-    if ref_mask.any():
-        S = pool[feats_sim].astype(float)
-        pcts = S.rank(pct=True)
-        ref_pct = pcts[ref_mask].mean().sort_values(ascending=False)
-        top_str = ref_pct.head(5)
-        top_weak = ref_pct.tail(5)
-        colA, colB = st.columns(2)
-        with colA:
-            st.markdown("**Fortalezas (Top-5)**")
-            for k, v_ in top_str.items():
-                st.write(f"• {label(k)} — {v_*100:.0f}º pct")
-        with colB:
-            st.markdown("**Áreas a mejorar (Bottom-5)**")
-            for k, v_ in top_weak.items():
-                st.write(f"• {label(k)} — {v_*100:.0f}º pct")
-    else:
-        st.info("El objetivo no está en el pool actual; no se muestra su perfil contextual.")
+            colA, colB = st.columns(2)
+            with colA:
+                st.markdown("**Fortalezas (Top-5)**")
+                for k, v_ in top_str.items():
+                    st.write(f"• {label(k)} — {v_*100:.0f}º pct")
+            with colB:
+                st.markdown("**Áreas a mejorar (Bottom-5)**")
+                for k, v_ in top_weak.items():
+                    st.write(f"• {label(k)} — {v_*100:.0f}º pct")
+        else:
+            st.info("El objetivo no está en el pool actual; no se muestra su perfil contextual.")
+
 
 
 # ===================== SHORTLIST =========================
@@ -1115,6 +1137,7 @@ with tab_shortlist:
         file_name="shortlist_scouting.csv",
         mime="text/csv",
     )
+
 
 
 
