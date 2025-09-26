@@ -1302,3 +1302,4 @@ with tab_shortlist:
         if st.button("🧹 Vaciar shortlist", use_container_width=True):
             st.session_state.shortlist_df = pd.DataFrame(columns=all_cols)
             st.rerun()
+
