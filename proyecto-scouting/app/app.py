@@ -678,8 +678,7 @@ with tab_ranking:
         """)
         gb.configure_grid_options(getRowStyle=zebra_js, enableBrowserTooltips=True, rowHeight=36)
 
-        # Heatmap (verde=mejor; rojo=peor)
-        heat_cols = [c for c in tabla_disp.columns if c.startsWith?. ? false : False]  # placeholder, no usar
+               # Heatmap (verde=mejor; rojo=peor)
         heat_cols = [c for c in tabla_disp.columns if c.startswith("Pct (")]
         if "Índice ponderado" in tabla_disp.columns:
             heat_cols.append("Índice ponderado")
@@ -908,6 +907,7 @@ with tab_shortlist:
         file_name="shortlist_scouting.csv",
         mime="text/csv",
     )
+
 
 
 
