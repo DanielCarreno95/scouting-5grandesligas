@@ -660,30 +660,68 @@ with tab_ranking:
 
     st.markdown('</div>', unsafe_allow_html=True) 
         
-# ===================== COMPARADOR (sin pesos) ===========================
+# ===================== COMPARADOR (Radar) ===========================
 with tab_compare:
     stop_if_empty(dff_view)
     st.subheader("Comparador de jugadores (Radar)")
 
-    players_all = dff_view["Player"].dropna().unique().tolist()
-    # Preselección (si vienes del ranking con algo en sesión)
-    pre_sel = st.session_state.get("cmp_players", [])
-    default_players = [p for p in pre_sel if p in players_all][:3] or \
-                      (players_all[:2] if len(players_all) >= 2 else players_all[:1])
+    # --- Estilos MUY compactos solo para este bloque ---
+    st.markdown("""
+    <style>
+    .cmp .block-container, .cmp [data-testid="stVerticalBlock"]{gap:.35rem !important}
+    .cmp .stRadio, .cmp .stMultiSelect, .cmp .stSelectbox, .cmp .stSlider,
+    .cmp .stToggleSwitch{margin: .1rem 0 .35rem 0 !important}
+    .cmp label{margin-bottom:.15rem !important}
+    .cmp .metric-note{color:#9aa2ad; font-size:.85rem; margin:.2rem 0 .6rem 0}
+    .cmp .stMetric{padding-top:.2rem}
+    </style>
+    """, unsafe_allow_html=True)
+    c = st.container()  # para aplicar la clase
+    c.markdown('<div class="cmp">', unsafe_allow_html=True)
 
+    # ---- Presets por rol (5 métricas) ----
+    ROLE_PRESETS = {
+        "Portero":     ["Save%", "PSxG+/-_per90", "PSxG_per90", "Saves_per90", "CS%"],
+        "Central":     ["Tkl+Int_per90", "Int_per90", "Blocks_per90", "Clr_per90", "Recov_per90"],
+        "Lateral":     ["PPA_per90", "PrgP_per90", "Carries_per90", "Tkl+Int_per90", "1/3_per90"],
+        "Mediocentro": ["xA_per90", "PrgP_per90", "Recov_per90", "Pressures_per90", "TotDist_per90"],
+        "Volante":     ["xA_per90", "KP_per90", "GCA90_per90", "PrgP_per90", "SCA_per90"],
+        "Delantero":   ["Gls_per90", "xG_per90", "NPxG_per90", "SoT_per90", "xA_per90"],
+    }
+
+    # ---- CONTROLES ----
+    # (1) Jugadores (máx 3)
+    players_all = dff_view["Player"].dropna().unique().tolist()
+    pre_sel = st.session_state.get("cmp_players", [])
+    default_players = [p for p in pre_sel if p in players_all][:3] or players_all[:2]
     sel_players = st.multiselect("Jugadores (máx. 3)", players_all, default=default_players, key="cmp_players")
-    if len(sel_players) == 0:
+    if not sel_players:
         st.info("Selecciona al menos 1 jugador.")
         st.stop()
     if len(sel_players) > 3:
         sel_players = sel_players[:3]
 
+    # (2) Jugador referencia (para Δ y percentiles)
     ref_player = st.selectbox("Jugador referencia (para Δ y percentiles)", sel_players, index=0, key="cmp_ref")
 
+    # (3) Preset por rol táctico (opcional)
+    col_r1, col_r2 = st.columns([0.72, 0.28])
+    with col_r1:
+        cmp_role = st.selectbox("Rol táctico (preset opcional)", ["— (ninguno)"] + list(ROLE_PRESETS.keys()), index=0, key="cmp_role")
+    with col_r2:
+        if cmp_role != "— (ninguno)":
+            if st.button("Aplicar preset", use_container_width=True, key="cmp_role_btn"):
+                preset_feats = [m for m in ROLE_PRESETS[cmp_role] if m in dff_view.columns]
+                st.session_state["feats"] = preset_feats
+                st.success(f"Preset aplicado: {cmp_role} → {len(preset_feats)} métricas.")
+
+    # (4) Métricas para el radar (elige 4–10)
+    # - si hay preset aplicado en esta sesión, lo usamos como default
+    default_feats = st.session_state.get("feats", [c for c in dff_view.columns if c.endswith("_per90")][:6])
     radar_feats = st.multiselect(
         "Métricas para el radar (elige 4–10)",
         options=[c for c in dff_view.columns if c.endswith("_per90") or c in ["Cmp%","Save%"]],
-        default=[c for c in dff_view.columns if c.endswith("_per90")][:6],
+        default=default_feats,
         key="feats",
         format_func=lambda c: label(c),
     )
@@ -691,35 +729,55 @@ with tab_compare:
         st.info("Selecciona al menos 4 métricas para el radar.")
         st.stop()
 
+    # (5) Contexto para percentiles + toggles
     col_ctx1, col_ctx2, col_ctx3 = st.columns([1,1,1.2])
     ctx_mode = col_ctx1.selectbox(
         "Cálculo de percentiles",
         options=["Muestra filtrada", "Por rol táctico", "Por competición"],
-        index=0, key="cmp_ctx",
+        index=0,
+        key="cmp_ctx",
     )
     show_baseline = col_ctx2.toggle("Mostrar baseline del grupo", value=True, key="cmp_baseline")
     use_percentiles = col_ctx3.toggle("Tooltip con percentiles", value=True, key="cmp_pct_tooltip")
 
+    # ---- Agrupación para percentiles según el contexto elegido ----
     def _ctx_mask(df_in: pd.DataFrame) -> pd.Series:
         if ctx_mode == "Muestra filtrada":
             return pd.Series(True, index=df_in.index)
         if ctx_mode == "Por rol táctico" and "Rol_Tactico" in df_in:
-            rol_ref = dff_view.loc[dff_view["Player"] == ref_player, "Rol_Tactico"].iloc[0] if any(dff_view["Player"] == ref_player) else None
-            return (df_in["Rol_Tactico"] == rol_ref) if rol_ref is not None else pd.Series(True, index=df_in.index)
+            if any(dff_view["Player"] == ref_player):
+                rol_ref = dff_view.loc[dff_view["Player"] == ref_player, "Rol_Tactico"].iloc[0]
+                return (df_in["Rol_Tactico"] == rol_ref)
         if ctx_mode == "Por competición" and "Comp" in df_in:
-            comp_ref = dff_view.loc[dff_view["Player"] == ref_player, "Comp"].iloc[0] if any(dff_view["Player"] == ref_player) else None
-            return (df_in["Comp"] == comp_ref) if comp_ref is not None else pd.Series(True, index=df_in.index)
+            if any(dff_view["Player"] == ref_player):
+                comp_ref = dff_view.loc[dff_view["Player"] == ref_player, "Comp"].iloc[0]
+                return (df_in["Comp"] == comp_ref)
         return pd.Series(True, index=df_in.index)
 
     df_group = dff_view[_ctx_mask(dff_view)].copy()
     if df_group.empty:
         df_group = dff_view.copy()
 
+    # ---- Normalización 0–1 para índice/kpi y radar ----
     S = df_group[radar_feats].astype(float).copy()
     S_norm = (S - S.min()) / (S.max() - S.min() + 1e-9)
     baseline = S_norm.mean(axis=0)
     pct = df_group[radar_feats].rank(pct=True) if use_percentiles else None
 
+    # ================= KPI SUPERIOR =================
+    c.markdown('<div class="metric-note">Índice agregado (0–100): media de métricas normalizadas seleccionadas. '
+               'El Δ indica cuánto está por encima/por debajo del jugador de referencia.</div>', unsafe_allow_html=True)
+
+    # Calculamos índice para cada jugador seleccionado
+    cols_kpi = c.columns(len(sel_players))
+    ref_val = S_norm[df_group["Player"] == ref_player][radar_feats].mean(axis=1).mean() * 100
+    for i, pl in enumerate(sel_players):
+        val = S_norm[df_group["Player"] == pl][radar_feats].mean(axis=1).mean() * 100
+        delta = None if pl == ref_player else round(val - float(ref_val), 1)
+        cols_kpi[i].metric(pl + (" (ref.)" if pl == ref_player else ""), f"{val:,.1f}",
+                           delta=None if delta is None else (f"{delta:+.1f}"))
+
+    # ================= RADAR =================
     theta_labels = [label(f) for f in radar_feats]
     fig = go.Figure()
     palette = ["#4F8BF9", "#F95F53", "#2BB673"]
@@ -759,19 +817,9 @@ with tab_compare:
         legend=dict(orientation="h", yanchor="bottom", y=-0.2, x=0),
         margin=dict(l=30, r=30, t=10, b=10)
     )
-    st.plotly_chart(fig, use_container_width=True)
+    c.plotly_chart(fig, use_container_width=True)
 
-    st.caption("**Índice agregado (0–100)** · Media de métricas normalizadas (peso igual).")
-    cols_kpi = st.columns(len(sel_players))
-    for i, pl in enumerate(sel_players):
-        val = S_norm[df_group["Player"] == pl][radar_feats].mean(axis=1).mean() * 100
-        delta = None
-        if pl != ref_player:
-            ref_val = S_norm[df_group["Player"] == ref_player][radar_feats].mean(axis=1).mean() * 100
-            delta = round(val - ref_val, 1)
-        cols_kpi[i].metric(pl, f"{val:,.1f}", delta=None if delta is None else (f"{delta:+.1f}"))
-
-    # Tabla comparativa (crudo) con Δ vs referencia y percentiles
+    # ================= TABLA COMPARATIVA =================
     raw_group = dff_view[_ctx_mask(dff_view)].copy()
     rows = {}
     for pl in sel_players:
@@ -781,7 +829,7 @@ with tab_compare:
     for pl, vals in rows.items():
         df_cmp[pl] = vals.values
     for pl in sel_players:
-        if pl == ref_player: 
+        if pl == ref_player:
             continue
         df_cmp[f"Δ ({pl} − {ref_player})"] = df_cmp[pl] - df_cmp[ref_player]
 
@@ -791,15 +839,33 @@ with tab_compare:
             pr = pct_raw[raw_group["Player"] == pl][radar_feats].mean(numeric_only=True) * 100
             df_cmp[f"% {pl}"] = pr.values
 
-    for c in df_cmp.columns:
-        if c != "Métrica":
-            df_cmp[c] = pd.to_numeric(df_cmp[c], errors="coerce").round(3)
+    for ccol in df_cmp.columns:
+        if ccol != "Métrica":
+            df_cmp[ccol] = pd.to_numeric(df_cmp[ccol], errors="coerce").round(3)
 
+    # Orden por la primera Δ disponible (magnitud absoluta)
     first_delta = [c for c in df_cmp.columns if c.startswith("Δ (")]
     if first_delta:
         df_cmp = df_cmp.reindex(df_cmp[first_delta[0]].abs().sort_values(ascending=False).index)
 
-    st.dataframe(df_cmp, use_container_width=True)
+    c.caption(
+        '<div class="metric-note"><b>Cómo leer:</b> columnas con nombre de jugador = valor por 90’. '
+        '<b>Δ</b> = diferencia vs referencia · <b>%</b> = percentil en el grupo elegido.</div>',
+        unsafe_allow_html=True
+    )
+    c.dataframe(df_cmp, use_container_width=True, hide_index=True)
+
+    # Export PNG del radar (opcional)
+    try:
+        png_bytes = fig.to_image(format="png", scale=2)
+        c.download_button("🖼️ Descargar radar (PNG)", data=png_bytes,
+                          file_name=f"radar_{'_vs_'.join(sel_players)}.png",
+                          mime="image/png", key="cmp_png_dl")
+    except Exception:
+        c.caption('Para exportar PNG instala <code>kaleido</code> en <code>requirements.txt</code>.',
+                  unsafe_allow_html=True)
+
+    c.markdown('</div>', unsafe_allow_html=True)  # cierre del contenedor con clase
 
 # ===================== SIMILARES =========================
 with tab_similarity:
@@ -850,6 +916,7 @@ with tab_shortlist:
         file_name="shortlist_scouting.csv",
         mime="text/csv",
     )
+
 
 
 
