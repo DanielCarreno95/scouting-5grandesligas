@@ -1103,42 +1103,214 @@ with tab_similarity:
         else:
             st.info("El objetivo no está en el universo actual; ajusta filtros o nombre.")
                 
-# ===================== SHORTLIST =========================
+# ===================== SHORTLIST (lista de seguimiento) =========================
 with tab_shortlist:
     stop_if_empty(dff_view)
     st.subheader("Shortlist (lista de seguimiento)")
-    if "shortlist" not in st.session_state: st.session_state.shortlist = []
-    to_add = st.multiselect("Añadir jugadores", dff_view["Player"].dropna().unique().tolist())
-    if st.button("➕ Agregar seleccionados"): st.session_state.shortlist = sorted(set(st.session_state.shortlist) | set(to_add))
-    to_remove = st.multiselect("Eliminar de shortlist", st.session_state.shortlist)
-    if st.button("🗑️ Eliminar seleccionados"): st.session_state.shortlist = [p for p in st.session_state.shortlist if p not in set(to_remove)]
-    sh = dff_view[dff_view["Player"].isin(st.session_state.shortlist)]
 
+    # ---------- bootstrap de la shortlist ----------
+    # Estructura base (se puede ampliar cuando quieras)
     base_cols = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]
-    sh_disp_num = round_numeric_for_display(sh[base_cols], ndigits=3)
-    st.dataframe(rename_for_display(sh_disp_num, base_cols), use_container_width=True)
+    meta_cols = ["Estado","Prioridad","Tags","Notas","Prox_accion","Estim_fee","Origen"]
+    all_cols  = base_cols + meta_cols
 
-    st.download_button(
-        "⬇️ Descargar shortlist (CSV)",
-        data=sh_disp_num.to_csv(index=False).encode("utf-8-sig"),
-        file_name="shortlist_scouting.csv",
-        mime="text/csv",
+    if "shortlist_df" not in st.session_state:
+        st.session_state.shortlist_df = pd.DataFrame(columns=all_cols)
+
+    # ---------- KPIs de cabecera ----------
+    shdf = st.session_state.shortlist_df.copy()
+    total = len(shdf)
+    k1,k2,k3,k4 = st.columns(4)
+    k1.metric("Jugadores en Shortlist", f"{total:,}")
+    k2.metric("En seguimiento", f"{(shdf['Estado']=='Seguimiento').sum():,}")
+    k3.metric("Candidatos", f"{(shdf['Estado']=='Candidato').sum():,}")
+    try:
+        k4.metric("Edad media", f"{pd.to_numeric(shdf['Age'], errors='coerce').mean():.1f}" if total else "—")
+    except Exception:
+        k4.metric("Edad media", "—")
+
+    st.markdown("<hr style='opacity:.12;margin:.35rem 0;'>", unsafe_allow_html=True)
+
+    # ---------- Añadir jugadores desde el universo filtrado ----------
+    add_left, add_right = st.columns([0.7,0.3])
+    with add_left:
+        add_sel = st.multiselect(
+            "Añadir jugadores (del universo actual)",
+            options=sorted(dff_view["Player"].dropna().unique().tolist()),
+            key="sh_add_sel"
+        )
+    with add_right:
+        origen_txt = st.text_input("Origen (opcional)", value="Manual / App")
+
+    if st.button("➕ Agregar seleccionados", use_container_width=True):
+        if add_sel:
+            to_add = dff_view[dff_view["Player"].isin(add_sel)].copy()
+            to_add = to_add[base_cols].drop_duplicates(subset=["Player","Squad","Season"]).copy()
+            # Campos operativos por defecto
+            to_add["Estado"]      = "Observado"
+            to_add["Prioridad"]   = "B"
+            to_add["Tags"]        = ""
+            to_add["Notas"]       = ""
+            to_add["Prox_accion"] = ""
+            to_add["Estim_fee"]   = ""
+            to_add["Origen"]      = origen_txt
+            # Evita duplicados por Player+Squad+Season
+            if not st.session_state.shortlist_df.empty:
+                key_old = st.session_state.shortlist_df[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
+                key_new = to_add[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
+                to_add = to_add[~key_new.isin(set(key_old))]
+            st.session_state.shortlist_df = pd.concat([st.session_state.shortlist_df, to_add], ignore_index=True)
+            st.success(f"Añadidos {len(to_add)} jugador(es) a la shortlist.")
+            st.rerun()
+
+    # ---------- Quitar jugadores ----------
+    del_sel = st.multiselect(
+        "Eliminar de shortlist",
+        options=sorted(st.session_state.shortlist_df["Player"].unique().tolist()) if not st.session_state.shortlist_df.empty else [],
     )
+    if st.button("🗑️ Eliminar seleccionados", use_container_width=True):
+        if del_sel:
+            st.session_state.shortlist_df = st.session_state.shortlist_df[~st.session_state.shortlist_df["Player"].isin(del_sel)].copy()
+            st.success(f"Eliminados {len(del_sel)} jugador(es).")
+            st.rerun()
 
+    st.markdown("<hr style='opacity:.12;margin:.5rem 0;'>", unsafe_allow_html=True)
 
+    # ---------- Filtros operativos sobre la shortlist ----------
+    if st.session_state.shortlist_df.empty:
+        st.info("Tu shortlist está vacía. Añade jugadores desde el bloque superior o desde Ranking/Comparador/Similares.")
+        st.stop()
 
+    f1,f2,f3,f4 = st.columns([1,1,1,1])
+    estados    = ["Observado","Seguimiento","Informe","Candidato","No procede"]
+    prioridades = ["A","B","C"]
+    f_estado   = f1.multiselect("Filtrar por estado", estados, default=estados)
+    f_prior    = f2.multiselect("Filtrar por prioridad", prioridades, default=prioridades)
+    roles_all  = sorted(st.session_state.shortlist_df["Rol_Tactico"].dropna().unique().tolist())
+    f_roles    = f3.multiselect("Rol táctico", roles_all, default=roles_all)
+    min_min    = f4.slider("Minutos mínimos", 0, int(st.session_state.shortlist_df["Min"].fillna(0).max() or 0), 0)
 
+    mask = (
+        st.session_state.shortlist_df["Estado"].isin(f_estado) &
+        st.session_state.shortlist_df["Prioridad"].isin(f_prior) &
+        st.session_state.shortlist_df["Rol_Tactico"].isin(f_roles) &
+        (pd.to_numeric(st.session_state.shortlist_df["Min"], errors="coerce").fillna(0) >= min_min)
+    )
+    view_df = st.session_state.shortlist_df[mask].copy()
 
+    # ---------- Tabla editable (AgGrid) ----------
+    try:
+        from st_aggrid import AgGrid, GridOptionsBuilder, ColumnsAutoSizeMode, GridUpdateMode, JsCode
 
+        disp = round_numeric_for_display(view_df, ndigits=3)
+        disp = rename_for_display(disp, all_cols)
 
+        gb = GridOptionsBuilder.from_dataframe(disp)
+        gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
 
+        # Editables: Estado, Prioridad, Tags, Notas, Prox_accion, Estim_fee
+        gb.configure_column("Estado", editable=True, cellEditor="agSelectCellEditor",
+                            cellEditorParams={"values": estados}, minWidth=130)
+        gb.configure_column("Prioridad", editable=True, cellEditor="agSelectCellEditor",
+                            cellEditorParams={"values": prioridades}, minWidth=90)
+        gb.configure_column("Tags", editable=True, minWidth=160)
+        gb.configure_column("Notas", editable=True, minWidth=220)
+        gb.configure_column("Prox_accion", editable=True, minWidth=120,
+                            header_name="Próx. acción (YYYY-MM-DD)")
+        gb.configure_column("Estim_fee", editable=True, minWidth=110, header_name="Estim. fee (€)")
 
+        # Colores por estado / prioridad
+        st_color_estado = JsCode("""
+            function(params){
+              let m = {
+                "Observado":"#1f2937", "Seguimiento":"#0ea5e9",
+                "Informe":"#a78bfa", "Candidato":"#22c55e", "No procede":"#ef4444"
+              };
+              let c = m[params.value] || "#1f2937";
+              return {'color':'#ffffff','backgroundColor':c};
+            }
+        """)
+        st_color_prio = JsCode("""
+            function(params){
+              let m = {"A":"#166534","B":"#3f3f46","C":"#7c2d12"};
+              let c = m[params.value] || "#3f3f46";
+              return {'color':'#ffffff','backgroundColor':c};
+            }
+        """)
+        gb.configure_column("Estado", cellStyle=st_color_estado)
+        gb.configure_column("Prioridad", cellStyle=st_color_prio)
 
+        grid = AgGrid(
+            disp,
+            gridOptions=gb.build(),
+            theme="streamlit",
+            update_mode=GridUpdateMode.VALUE_CHANGED,
+            columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
+            height=420, allow_unsafe_jscode=True
+        )
 
+        # Sincroniza cambios al DataFrame en sesión (por índice)
+        updated = grid["data"]
+        # Mapear de vuelta nombres si rename_for_display alteró alguno
+        back_map = {label(c): c for c in all_cols}
+        updated = updated.rename(columns=back_map)
+        # Sustituye solo las filas visibles (mask) preservando otras
+        st.session_state.shortlist_df.loc[mask, list(updated.columns)] = updated.values
 
+    except Exception:
+        st.caption("Vista simple (instala `st-aggrid` para edición en línea).")
+        st.dataframe(view_df, use_container_width=True, height=420)
 
+    st.markdown("<hr style='opacity:.12;margin:.5rem 0;'>", unsafe_allow_html=True)
 
+    # ---------- Exportar / Importar ----------
+    col_dl, col_ul, col_clear = st.columns([0.4,0.4,0.2])
+    with col_dl:
+        st.download_button(
+            "⬇️ Descargar shortlist (CSV)",
+            data=st.session_state.shortlist_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="shortlist_scouting.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+    with col_ul:
+        up = st.file_uploader("Subir shortlist (CSV)", type=["csv"], label_visibility="collapsed")
+        if up is not None:
+            try:
+                new_df = pd.read_csv(up)
+                # Asegura columnas
+                for c in all_cols:
+                    if c not in new_df.columns: new_df[c] = ""
+                st.session_state.shortlist_df = new_df[all_cols].copy()
+                st.success("Shortlist cargada.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"No pude leer el CSV: {e}")
+    with col_clear:
+        if st.button("🧹 Vaciar shortlist", use_container_width=True):
+            st.session_state.shortlist_df = pd.DataFrame(columns=all_cols)
+            st.rerun()
 
+    # ---------- Ayuda para añadir desde otras pestañas ----------
+    with st.expander("Cómo añadir desde Ranking/Comparador/Similares", expanded=False):
+        st.markdown("""
+        - Guarda filas en una variable `df_rows` (con al menos: Player, Squad, Season, Rol_Tactico, Comp, Min, Age).
+        - Luego llama a:
+
+        ```python
+        def add_to_shortlist(df_rows, origen="Desde Ranking"):
+            required = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]
+            rows = df_rows[required].drop_duplicates(subset=["Player","Squad","Season"]).copy()
+            rows["Estado"] = "Observado"
+            rows["Prioridad"] = "B"
+            rows["Tags"] = ""
+            rows["Notas"] = ""
+            rows["Prox_accion"] = ""
+            rows["Estim_fee"] = ""
+            rows["Origen"] = origen
+            st.session_state.shortlist_df = pd.concat([st.session_state.shortlist_df, rows], ignore_index=True).drop_duplicates(subset=["Player","Squad","Season"])
+        ```
+        """)
 
 
 
