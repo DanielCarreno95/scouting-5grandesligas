@@ -869,33 +869,260 @@ with tab_compare:
     c.markdown('</div>', unsafe_allow_html=True)
 
 
-# ===================== SIMILARES =========================
+# ===================== SIMILARES (mejorado) =========================
 with tab_similarity:
     stop_if_empty(dff_view)
     st.subheader("Jugadores similares (cosine similarity)")
+
+    # ---------- Presets por rol (reutiliza los mismos 5 de Ranking) ----------
+    ROLE_PRESETS = {
+        "Portero":   ["Save%", "PSxG+/-_per90", "PSxG_per90", "Saves_per90", "CS%"],
+        "Central":   ["Tkl+Int_per90", "Int_per90", "Blocks_per90", "Clr_per90", "Recov_per90"],
+        "Lateral":   ["PPA_per90", "PrgP_per90", "Carries_per90", "Tkl+Int_per90", "1/3_per90"],
+        "Mediocentro": ["xA_per90", "PrgP_per90", "Recov_per90", "Pressures_per90", "TotDist_per90"],
+        "Volante":  ["xA_per90", "KP_per90", "GCA90_per90", "PrgP_per90", "SCA_per90"],
+        "Delantero":["Gls_per90", "xG_per90", "NPxG_per90", "SoT_per90", "xA_per90"],
+    }
+
+    # ---------- Controles superiores ----------
+    top1, top2, top3, top4 = st.columns([1,1,1,1], gap="small")
+    players_all = dff_view["Player"].dropna().unique().tolist()
+
+    # Jugadores a comparar (1 objetivo + N-1 comparables)
+    sel_players = st.multiselect(
+        "Jugadores (máx. 3)",
+        players_all,
+        default=players_all[:2] if len(players_all) >= 2 else players_all[:1],
+        key="sim_players",
+    )
+    if len(sel_players) == 0:
+        st.info("Selecciona al menos 1 jugador.")
+        st.stop()
+    if len(sel_players) > 3:
+        sel_players = sel_players[:3]
+
+    ref_player = st.selectbox(
+        "Jugador objetivo (para similitud)",
+        sel_players, index=0, key="sim_ref"
+    )
+
+    # Preset por rol (opcional)
+    col_preset1, col_preset2 = st.columns([0.7, 0.3])
+    with col_preset1:
+        preset_sel = st.selectbox(
+            "Rol táctico (preset opcional)",
+            ["— (ninguno)"] + list(ROLE_PRESETS.keys()),
+            index=0, key="sim_preset"
+        )
+    with col_preset2:
+        apply_preset = st.button("Aplicar preset de métricas", use_container_width=True)
+
+    # Selección de métricas (si hay preset, lo propone por defecto)
+    default_feats = ROLE_PRESETS.get(preset_sel, None)
     feats_sim = st.multiselect(
         "Selecciona 6–12 métricas",
-        options=[m for m in dff_view.columns if m.endswith("_per90") or m in ["Cmp%","Save%"]],
-        default=[m for m in dff_view.columns if m.endswith("_per90")][:8],
+        options=[c for c in dff_view.columns if c.endswith("_per90") or c in ["Cmp%","Save%"]],
+        default=(default_feats if default_feats else [c for c in dff_view.columns if c.endswith("_per90")][:8]),
         key="sim_feats",
         format_func=lambda c: label(c)
     )
-    target = st.selectbox("Jugador objetivo", dff_view["Player"].dropna().unique().tolist())
-    if feats_sim and target:
-        X = dff_view[feats_sim].astype(float).fillna(0.0).to_numpy()
-        X = (X - X.min(axis=0)) / (X.max(axis=0) - X.min(axis=0) + 1e-9)
-        from numpy.linalg import norm
-        idx = dff_view.index[dff_view["Player"]==target][0]
-        v = X[dff_view.index.get_loc(idx)]
-        sims = (X @ v) / (norm(X, axis=1)*norm(v) + 1e-9)
+    if len(feats_sim) < 6:
+        st.info("Selecciona al menos 6 métricas para una similitud estable.")
+        st.stop()
 
-        out_cols = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age","similarity"]
-        out = dff_view[["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]].copy()
-        out["similarity"] = sims
-        out = out.sort_values("similarity", ascending=False).head(25)
+    # Normalización (contexto)
+    ctx1, ctx2, ctx3 = st.columns([1,1,1])
+    ctx_mode = ctx1.selectbox(
+        "Normalización de métricas",
+        ["Muestra filtrada", "Por rol táctico", "Por competición"],
+        index=0, key="sim_ctx"
+    )
+    excl_same_team = ctx2.toggle("Excluir mismo equipo", value=False, key="sim_excl_team")
+    excl_same_comp = ctx3.toggle("Excluir misma competición", value=False, key="sim_excl_comp")
 
-        out_disp_num = round_numeric_for_display(out, ndigits=3)
-        st.dataframe(rename_for_display(out_disp_num, out_cols), use_container_width=True)
+    # Opciones de salida
+    o1, o2, o3 = st.columns([1,1,1])
+    topn = o1.slider("Top N resultados", 5, 100, 25, key="sim_topn")
+    show_map = o2.toggle("Ver mapa de similitud (PCA 2D)", value=True, key="sim_map")
+    allow_shortlist = o3.toggle("Botón: añadir a shortlist", value=True, key="sim_shortlist_btn")
+
+    # ---------- Subconjunto de comparación según contexto ----------
+    def _ctx_mask(df_in: pd.DataFrame) -> pd.Series:
+        if ctx_mode == "Muestra filtrada":
+            return pd.Series(True, index=df_in.index)
+        if ctx_mode == "Por rol táctico" and "Rol_Tactico" in df_in.columns:
+            rol_ref = dff_view.loc[dff_view["Player"] == ref_player, "Rol_Tactico"].iloc[0] \
+                      if any(dff_view["Player"] == ref_player) else None
+            return (df_in["Rol_Tactico"] == rol_ref) if rol_ref is not None else pd.Series(True, index=df_in.index)
+        if ctx_mode == "Por competición" and "Comp" in df_in.columns:
+            comp_ref = dff_view.loc[dff_view["Player"] == ref_player, "Comp"].iloc[0] \
+                      if any(dff_view["Player"] == ref_player) else None
+            return (df_in["Comp"] == comp_ref) if comp_ref is not None else pd.Series(True, index=df_in.index)
+        return pd.Series(True, index=df_in.index)
+
+    pool = dff_view[_ctx_mask(dff_view)].copy()
+    stop_if_empty(pool)
+
+    # Excluir mismos equipo/competición si aplica
+    if excl_same_team and "Squad" in pool.columns:
+        ref_team = pool.loc[pool["Player"] == ref_player, "Squad"].iloc[0] if any(pool["Player"] == ref_player) else None
+        if ref_team:
+            pool = pool[pool["Squad"] != ref_team]
+    if excl_same_comp and "Comp" in pool.columns:
+        ref_comp = pool.loc[pool["Player"] == ref_player, "Comp"].iloc[0] if any(pool["Player"] == ref_player) else None
+        if ref_comp:
+            pool = pool[pool["Comp"] != ref_comp]
+
+    stop_if_empty(pool)
+
+    # ---------- KPI header ----------
+    try:
+        k1, k2, k3, k4 = st.columns(4, gap="small")
+        k1.metric("Jugadores en pool", f"{len(pool):,}")
+        k2.metric("Candidatos únicos", f"{pool['Player'].nunique():,}")
+        k3.metric("Edad media (pool)", f"{pd.to_numeric(pool['Age'], errors='coerce').mean():.1f}" if "Age" in pool else "—")
+        # Sim provisoria con primeras 50 filas para estimar media
+        _tmp = pool.head(min(50, len(pool)))[feats_sim].astype(float).fillna(0.0)
+        # min-max simple
+        Xtmp = (_tmp - _tmp.min()) / (_tmp.max() - _tmp.min() + 1e-9)
+        k4.metric("Varianza media (métricas)", f"{float(Xtmp.var().mean()):.3f}")
+    except Exception:
+        pass
+
+    # ---------- Similitud: cosine sobre min-max (contexto elegido) ----------
+    # Matriz y normalización 0-1 por columna
+    X_raw = pool[feats_sim].astype(float).copy()
+    X = (X_raw - X_raw.min()) / (X_raw.max() - X_raw.min() + 1e-9)
+    X = X.fillna(0.0)
+
+    # Vector objetivo (promedio si el ref_player aparece varias filas)
+    if any(pool["Player"] == ref_player):
+        v = X[pool["Player"] == ref_player].mean(axis=0).to_numpy()
+        # Eliminar la(s) fila(s) del propio ref para ranking
+        pool_no_ref = pool[pool["Player"] != ref_player].copy()
+        X_no_ref = X.loc[pool_no_ref.index].copy()
+    else:
+        # Si el ref no está en pool (raro), usa dff_view
+        _fallback = dff_view[dff_view["Player"] == ref_player]
+        v = (_fallback[feats_sim].astype(float) - X_raw.min()) / (X_raw.max() - X_raw.min() + 1e-9)
+        v = v.fillna(0.0).mean(axis=0).to_numpy()
+        pool_no_ref = pool.copy()
+        X_no_ref = X.copy()
+
+    import numpy as _np
+    # Normaliza a norma 1 (unit vectors) para dot product
+    v_unit = v / (_np.linalg.norm(v) + 1e-12)
+    U = X_no_ref.to_numpy()
+    U_norms = _np.linalg.norm(U, axis=1, keepdims=True) + 1e-12
+    U_unit = U / U_norms
+
+    sim = (U_unit @ v_unit)  # cosine similarity
+
+    # ---------- "Por qué se parece": top 3 términos que más aportan ----------
+    # Cada candidato u tiene contribuciones u_j * v_j (ambos unit)
+    contrib = U_unit * v_unit  # shape (n_samples, n_feats)
+    contrib_idx = _np.argsort(-contrib, axis=1)[:, :3]  # top 3 por fila
+    top_terms = []
+    feat_labels = [label(f) for f in feats_sim]
+    for row_idx in range(contrib_idx.shape[0]):
+        idxs = contrib_idx[row_idx]
+        top_terms.append(", ".join([feat_labels[i] for i in idxs]))
+
+    # ---------- Resultado tabular ----------
+    out_cols = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]
+    out = pool_no_ref[out_cols].copy()
+    out["similarity"] = sim
+    out["Top similitudes (3)"] = top_terms
+
+    # Ordena y corta
+    out = out.sort_values("similarity", ascending=False).head(topn)
+
+    # Formato/heatmap con AgGrid
+    try:
+        from st_aggrid import AgGrid, GridOptionsBuilder, ColumnsAutoSizeMode, GridUpdateMode, JsCode
+        disp = round_numeric_for_display(out, ndigits=3)
+        disp = rename_for_display(disp, out_cols + ["similarity","Top similitudes (3)"])
+
+        gb = GridOptionsBuilder.from_dataframe(disp)
+        gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
+
+        # Heatmap en similarity (0..1 -> verde->amarillo->rojo invertido? No, alto=mejor->verde)
+        heat_js = JsCode("""
+            function(params) {
+                var v = Number(params.value);
+                if (isNaN(v)) { return {}; }
+                v = Math.max(0, Math.min(1.0, v));
+                // 0 -> rojo (0°, 60% sat, 40% light), 1 -> verde (120°)
+                var hue = 120 * v;
+                return {'backgroundColor': 'hsl(' + hue + ', 65%, 30%)', 'color': 'white'};
+            }
+        """)
+        gb.configure_column("similarity", header_name="similarity", cellStyle=heat_js, minWidth=120)
+
+        if allow_shortlist:
+            gb.configure_column("Player", pinned="left", minWidth=220)
+
+        grid = AgGrid(
+            disp,
+            gridOptions=gb.build(),
+            update_mode=GridUpdateMode.NO_UPDATE,
+            columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
+            height=480,
+            theme="streamlit",
+            allow_unsafe_jscode=True,
+        )
+    except Exception:
+        st.dataframe(out, use_container_width=True, hide_index=True)
+
+    # Export
+    st.download_button(
+        "⬇️ Exportar similares (CSV)",
+        data=out.to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"similares_{ref_player}.csv",
+        mime="text/csv",
+        key="sim_dl"
+    )
+
+    # ---------- Mapa (PCA 2D ligero) ----------
+    if show_map:
+        try:
+            # PCA casero con SVD (sin scikit)
+            X_centered = X - X.mean(axis=0)
+            U_svd, S_svd, Vt = _np.linalg.svd(X_centered.to_numpy(), full_matrices=False)
+            Z = U_svd[:, :2] * S_svd[:2]  # proyección 2D
+
+            import plotly.express as px
+            plot_df = pool.copy()
+            plot_df["_pc1"] = Z[:, 0]
+            plot_df["_pc2"] = Z[:, 1]
+
+            color_col = "Rol_Tactico" if "Rol_Tactico" in plot_df.columns else None
+            fig = px.scatter(
+                plot_df, x="_pc1", y="_pc2",
+                color=color_col,
+                hover_name="Player",
+                labels={"_pc1":"PC1 (var. máx.)", "_pc2":"PC2"},
+                template="plotly_dark",
+                opacity=0.85
+            )
+            # Target (si existe en pool)
+            if any(pool["Player"] == ref_player):
+                r = plot_df[plot_df["Player"] == ref_player]
+                fig.add_scatter(
+                    x=r["_pc1"], y=r["_pc2"], mode="markers+text",
+                    text=[ref_player], textposition="top center",
+                    marker=dict(size=14, symbol="star", color="#22c55e"),
+                    name="Objetivo"
+                )
+            fig.update_layout(
+                title="Mapa de similitud (PCA 2D) — color por rol",
+                margin=dict(l=10, r=10, t=40, b=10),
+                legend=dict(orientation="h", yanchor="bottom", y=-0.25, x=0)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.caption(f"No se pudo generar el mapa PCA: {e}")
+
 
 # ===================== SHORTLIST =========================
 with tab_shortlist:
@@ -918,6 +1145,7 @@ with tab_shortlist:
         file_name="shortlist_scouting.csv",
         mime="text/csv",
     )
+
 
 
 
