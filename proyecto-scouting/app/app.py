@@ -1105,180 +1105,250 @@ with tab_similarity:
                 
 # ===================== SHORTLIST (lista de seguimiento) =========================
 with tab_shortlist:
-    stop_if_empty(dff_view)
     st.subheader("Shortlist (lista de seguimiento)")
 
-    # --------- bootstrap ---------
+    # --------- setup ---------
     base_cols = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]
     meta_cols = ["Estado","Prioridad","Tags","Notas","Prox_accion","Estim_fee","Origen"]
-    all_cols  = base_cols + meta_cols
+    core_cols = base_cols + meta_cols
 
     if "shortlist_df" not in st.session_state:
-        st.session_state.shortlist_df = pd.DataFrame(columns=all_cols)
+        st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
 
-    shdf = st.session_state.shortlist_df.copy()
-
-    # --------- KPIs ---------
-    k1,k2,k3,k4 = st.columns(4)
-    k1.metric("Jugadores en Shortlist", f"{len(shdf):,}")
-    k2.metric("En seguimiento", f"{(shdf['Estado']=='Seguimiento').sum():,}")
-    k3.metric("Candidatos", f"{(shdf['Estado']=='Candidato').sum():,}")
-    try:
-        k4.metric("Edad media", f"{pd.to_numeric(shdf['Age'], errors='coerce').mean():.1f}" if len(shdf) else "—")
-    except Exception:
-        k4.metric("Edad media", "—")
-
-    st.markdown("<hr style='opacity:.12;margin:.35rem 0;'>", unsafe_allow_html=True)
-
-    # =================== AÑADIR JUGADORES (con búsqueda) ===================
-    add_col, act_col = st.columns([0.7,0.3])
-
-    with add_col:
-        add_sel = st.multiselect(
-            "Añadir jugadores (del universo actual)",
-            options=sorted(dff_view["Player"].dropna().unique().tolist()),
-            placeholder="Escribe para buscar…",
-            key="sh_add_sel"
+    # ======== util: métrica por fila (match exacto o media jugador) ========
+    def attach_metric_columns(shdf_in: pd.DataFrame, metrics_to_add: list) -> pd.DataFrame:
+        if not metrics_to_add:
+            return shdf_in.copy()
+        sh = shdf_in.copy()
+        uni = dff_view.copy()  # universo actual
+        # fallback medias por jugador (en universo)
+        by_player_mean = (
+            uni.groupby("Player")[metrics_to_add]
+            .mean(numeric_only=True)
+            .reset_index()
+            .rename(columns={c: f"{c}" for c in metrics_to_add})
         )
+        # match exacto Player+Squad+Season
+        match_cols = ["Player","Squad","Season"]
+        mrg = pd.merge(sh, uni[match_cols + metrics_to_add], on=match_cols, how="left")
+        # completa vacíos con media por jugador
+        mrg = pd.merge(mrg, by_player_mean, on="Player", how="left", suffixes=("", "__ply"))
+        for m in metrics_to_add:
+            if m in mrg.columns and f"{m}__ply" in mrg.columns:
+                mrg[m] = mrg[m].fillna(mrg[f"{m}__ply"])
+                mrg.drop(columns=[f"{m}__ply"], inplace=True)
+        return mrg
 
-    # --- Acciones sobre la selección ---
-    sel_left, sel_right = st.columns([0.5,0.5])
+    # ======== estilos compactos ========
+    st.markdown("""
+    <style>
+      .sh-compact label, .sh-compact div[role="radiogroup"], .sh-compact .stTextInput, 
+      .sh-compact .stMultiSelect, .sh-compact .stTextArea, .sh-compact .stDateInput {margin-bottom:.25rem}
+      .sh-hr{opacity:.12;margin:.35rem 0}
+    </style>
+    """, unsafe_allow_html=True)
 
-    # Descargar CSV de la selección (toda la info disponible del universo filtrado)
-    with sel_left:
-        if add_sel:
-            df_sel_full = dff_view[dff_view["Player"].isin(add_sel)].copy()
-            st.download_button(
-                "⬇️ Descargar selección (CSV)",
-                data=df_sel_full.to_csv(index=False).encode("utf-8-sig"),
-                file_name="seleccion_jugadores.csv",
-                mime="text/csv",
-                use_container_width=True,
+    # ===================== ALTA COMPACTA =====================
+    st.markdown("**➕ Alta de jugadores** · añade y deja ya marcado el estado, prioridad y notas.")
+    with st.container():
+        c1,c2 = st.columns([0.62,0.38])
+        with c1:
+            add_sel = st.multiselect(
+                "Jugador(es) del universo actual",
+                options=sorted(dff_view["Player"].dropna().unique().tolist()),
+                placeholder="Escribe para buscar…",
+                key="sh_add_sel",
+            )
+        with c2:
+            st.write("")  # alineación
+            add_btn = st.button("➕ Agregar seleccionados", use_container_width=True)
+
+        # Formulario de metadatos (compacto)
+        with st.container():
+            f1,f2,f3,f4,f5 = st.columns([0.15,0.12,0.22,0.21,0.15], gap="small")
+            with f1:
+                add_estado = st.selectbox("Estado", ["Observado","Seguimiento","Informe","Candidato","No procede"], index=0, key="sh_add_estado")
+            with f2:
+                add_prior = st.selectbox("Prioridad", ["A","B","C"], index=1, key="sh_add_prior")
+            with f3:
+                add_tags = st.text_input("Tags (coma)", key="sh_add_tags", placeholder="juvenil, U23, homegrown")
+            with f4:
+                add_notas = st.text_input("Notas", key="sh_add_notas", placeholder="contexto, rol, status informe…")
+            with f5:
+                add_fee = st.text_input("Estim. fee (€)", key="sh_add_fee", placeholder="ej. 12-15M")
+
+            g1,g2 = st.columns([0.18,0.82])
+            with g1:
+                add_date = st.date_input("Próx. acción", value=None, format="YYYY-MM-DD", key="sh_add_date")
+            with g2:
+                st.caption("Define seguimiento inmediato: llamada, informe, live-scouting, vídeo, etc.")
+
+        st.markdown("<hr class='sh-hr'>", unsafe_allow_html=True)
+
+        # Acción de alta
+        if add_btn:
+            if not add_sel:
+                st.warning("Selecciona al menos un jugador.")
+            else:
+                take = dff_view[dff_view["Player"].isin(add_sel)][base_cols].drop_duplicates(
+                    subset=["Player","Squad","Season"]
+                ).copy()
+                if take.empty:
+                    st.info("No encontré filas en el universo actual para esos jugadores.")
+                else:
+                    take["Estado"]      = add_estado
+                    take["Prioridad"]   = add_prior
+                    take["Tags"]        = add_tags
+                    take["Notas"]       = add_notas
+                    take["Prox_accion"] = (add_date.isoformat() if add_date else "")
+                    take["Estim_fee"]   = add_fee
+                    take["Origen"]      = "App"
+
+                    if not st.session_state.shortlist_df.empty:
+                        k_old = st.session_state.shortlist_df[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
+                        k_new = take[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
+                        take = take[~k_new.isin(set(k_old))]
+                    if len(take):
+                        st.session_state.shortlist_df = pd.concat([st.session_state.shortlist_df, take], ignore_index=True)
+                        st.success(f"Añadidos {len(take)} jugador(es) a la shortlist.")
+                        st.rerun()
+                    else:
+                        st.info("Todos los seleccionados ya estaban en la shortlist.")
+
+    st.markdown("<hr class='sh-hr'>", unsafe_allow_html=True)
+
+    # ===================== KPIs (post-edición) =====================
+    shdf = st.session_state.shortlist_df.copy()
+    # KPIs por estado
+    def _c(est): return int((shdf["Estado"]==est).sum()) if len(shdf) else 0
+    k_all, k_seg, k_cand, k_inf, k_np, k_age = st.columns(6)
+    k_all.metric("Jugadores en Shortlist", f"{len(shdf):,}")
+    k_seg.metric("Seguimiento", f"{_c('Seguimiento'):,}")
+    k_cand.metric("Candidatos", f"{_c('Candidato'):,}")
+    k_inf.metric("Informe", f"{_c('Informe'):,}")
+    k_np.metric("No procede", f"{_c('No procede'):,}")
+    try:
+        k_age.metric("Edad media", f"{pd.to_numeric(shdf['Age'], errors='coerce').mean():.1f}" if len(shdf) else "—")
+    except Exception:
+        k_age.metric("Edad media", "—")
+
+    st.markdown("<hr class='sh-hr'>", unsafe_allow_html=True)
+
+    # ===================== Columnas extra de métricas =====================
+    all_metric_candidates = [c for c in dff_view.columns if (c.endswith("_per90") or c in ["Cmp%","Save%"])]
+    extra_metrics = st.multiselect(
+        "Añadir columnas de métricas a la tabla (del universo actual)",
+        options=sorted(all_metric_candidates),
+        default=[],
+        format_func=lambda c: METRIC_LABELS.get(c,c),
+        key="sh_extra_metrics"
+    )
+    table_df = attach_metric_columns(st.session_state.shortlist_df, extra_metrics)
+
+    # Mostrar nombres “bonitos”
+    show_cols = core_cols + extra_metrics
+    disp_df = round_numeric_for_display(table_df[show_cols], ndigits=3)
+    disp_df_ren = rename_for_display(disp_df, show_cols)
+
+    # ===================== Tabla + Acciones a la derecha =====================
+    left, right = st.columns([0.77, 0.23], gap="large")
+
+    with left:
+        try:
+            from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode, JsCode
+            gb = GridOptionsBuilder.from_dataframe(disp_df_ren)
+            gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
+            # Editables
+            gb.configure_column("Estado", editable=True, cellEditor="agSelectCellEditor",
+                                cellEditorParams={"values":["Observado","Seguimiento","Informe","Candidato","No procede"]}, minWidth=130)
+            gb.configure_column("Prioridad", editable=True, cellEditor="agSelectCellEditor",
+                                cellEditorParams={"values":["A","B","C"]}, minWidth=90)
+            gb.configure_column("Tags", editable=True, minWidth=160)
+            gb.configure_column("Notas", editable=True, minWidth=220)
+            gb.configure_column("Próx. acción (YYYY-MM-DD)", editable=True, minWidth=160)
+            gb.configure_column("Estim. fee (€)", editable=True, minWidth=120)
+
+            # Colores
+            st_color_estado = JsCode("""
+              function(params){
+                let m={"Observado":"#1f2937","Seguimiento":"#0ea5e9","Informe":"#a78bfa","Candidato":"#22c55e","No procede":"#ef4444"};
+                let c=m[params.value]||"#1f2937"; return {'color':'#fff','backgroundColor':c};
+              }
+            """)
+            st_color_prio = JsCode("""
+              function(params){
+                let m={"A":"#166534","B":"#3f3f46","C":"#7c2d12"}; let c=m[params.value]||"#3f3f46";
+                return {'color':'#fff','backgroundColor':c};
+              }
+            """)
+            gb.configure_column("Estado", cellStyle=st_color_estado)
+            gb.configure_column("Prioridad", cellStyle=st_color_prio)
+
+            # selección
+            gb.configure_selection("single", use_checkbox=True)
+            grid = AgGrid(
+                disp_df_ren,
+                gridOptions=gb.build(),
+                theme="streamlit",
+                update_mode=GridUpdateMode.VALUE_CHANGED | GridUpdateMode.SELECTION_CHANGED,
+                columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
+                height=420,
+                allow_unsafe_jscode=True
             )
 
-    # Agregar seleccionados a la shortlist
-    with sel_right:
-        if st.button("➕ Agregar seleccionados", use_container_width=True):
-            if add_sel:
-                to_add = dff_view[dff_view["Player"].isin(add_sel)][base_cols] \
-                            .drop_duplicates(subset=["Player","Squad","Season"]).copy()
-                # Metadatos por defecto
-                to_add["Estado"]      = "Observado"
-                to_add["Prioridad"]   = "B"
-                to_add["Tags"]        = ""
-                to_add["Notas"]       = ""
-                to_add["Prox_accion"] = ""
-                to_add["Estim_fee"]   = ""
-                to_add["Origen"]      = "App"
+            # Sincroniza cambios al df base (mapear nombres bonitos -> originales)
+            back_map = {METRIC_LABELS.get(c,c): c for c in show_cols}
+            updated = pd.DataFrame(grid["data"]).rename(columns={v:k for k,v in back_map.items()})  # a nombres "core"
+            # volver a nombres originales
+            updated = updated.rename(columns={METRIC_LABELS.get(c,c): c for c in show_cols})
+            # columnas core que son editables y deben volver a guardar
+            return_map = {METRIC_LABELS.get(c,c): c for c in core_cols}
+            updated_core = pd.DataFrame(grid["data"]).rename(columns=return_map)
 
-                # Evitar duplicados por Player+Squad+Season
-                if not st.session_state.shortlist_df.empty:
-                    key_old = st.session_state.shortlist_df[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
-                    key_new = to_add[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
-                    to_add = to_add[~key_new.isin(set(key_old))]
+            # merge por clave de identidad
+            key_cols = ["Player","Squad","Season"]
+            sh_base = st.session_state.shortlist_df.copy()
+            sh_base = sh_base.set_index(key_cols)
+            upd_core = updated_core.set_index(key_cols)
+            sh_base.loc[upd_core.index, list(set(core_cols) & set(upd_core.columns))] = upd_core[list(set(core_cols) & set(upd_core.columns))]
+            st.session_state.shortlist_df = sh_base.reset_index()
 
-                st.session_state.shortlist_df = pd.concat(
-                    [st.session_state.shortlist_df, to_add], ignore_index=True
+            # Selección
+            selected_rows = grid.get("selected_rows", [])
+            selected_key = None
+            if selected_rows:
+                sr = pd.DataFrame(selected_rows)
+                # mapear columnas bonitos -> core
+                sr = sr.rename(columns={METRIC_LABELS.get(c,c): c for c in show_cols})
+                try:
+                    selected_key = tuple(sr.loc[0, ["Player","Squad","Season"]].tolist())
+                except Exception:
+                    selected_key = None
+
+        except Exception:
+            st.dataframe(disp_df_ren, use_container_width=True, height=420)
+            selected_key = None
+
+    with right:
+        st.markdown("### Acciones")
+        if selected_key is not None:
+            st.success(f"Seleccionado: {selected_key[0]} — {selected_key[1]} — {selected_key[2]}")
+        else:
+            st.caption("Selecciona una fila para activar acciones sobre el jugador.")
+
+        # Eliminar seleccionado
+        disabled_del = (selected_key is None)
+        if st.button("🗑️ Eliminar seleccionado", use_container_width=True, disabled=disabled_del):
+            if selected_key:
+                mask = ~(
+                    (st.session_state.shortlist_df["Player"]==selected_key[0]) &
+                    (st.session_state.shortlist_df["Squad"]==selected_key[1]) &
+                    (st.session_state.shortlist_df["Season"]==selected_key[2])
                 )
-                st.success(f"Añadidos {len(to_add)} jugador(es) a la shortlist.")
+                st.session_state.shortlist_df = st.session_state.shortlist_df[mask].copy()
                 st.rerun()
 
-    # =================== ELIMINAR DE SHORTLIST ===================
-    del_sel = st.multiselect(
-        "Eliminar de shortlist",
-        options=sorted(st.session_state.shortlist_df["Player"].unique().tolist()) if not st.session_state.shortlist_df.empty else [],
-    )
-    if st.button("🗑️ Eliminar seleccionados", use_container_width=True):
-        if del_sel:
-            st.session_state.shortlist_df = st.session_state.shortlist_df[~st.session_state.shortlist_df["Player"].isin(del_sel)].copy()
-            st.success(f"Eliminados {len(del_sel)} jugador(es).")
-            st.rerun()
-
-    st.markdown("<hr style='opacity:.12;margin:.5rem 0;'>", unsafe_allow_html=True)
-
-    # =================== LISTA VACÍA ===================
-    if st.session_state.shortlist_df.empty:
-        st.info("Tu shortlist está vacía. Añade jugadores desde el bloque superior o desde Ranking/Comparador/Similares.")
-        st.stop()
-
-    # =================== FILTROS OPERATIVOS ===================
-    f1,f2,f3,f4 = st.columns([1,1,1,1])
-    estados     = ["Observado","Seguimiento","Informe","Candidato","No procede"]
-    prioridades = ["A","B","C"]
-    f_estado    = f1.multiselect("Estado", estados, default=estados)
-    f_prior     = f2.multiselect("Prioridad", prioridades, default=prioridades)
-    roles_all   = sorted(st.session_state.shortlist_df["Rol_Tactico"].dropna().unique().tolist())
-    f_roles     = f3.multiselect("Rol táctico", roles_all, default=roles_all)
-    min_min     = f4.slider("Minutos (mín.)", 0, int(st.session_state.shortlist_df["Min"].fillna(0).max() or 0), 0)
-
-    mask = (
-        st.session_state.shortlist_df["Estado"].isin(f_estado) &
-        st.session_state.shortlist_df["Prioridad"].isin(f_prior) &
-        st.session_state.shortlist_df["Rol_Tactico"].isin(f_roles) &
-        (pd.to_numeric(st.session_state.shortlist_df["Min"], errors="coerce").fillna(0) >= min_min)
-    )
-    view_df = st.session_state.shortlist_df[mask].copy()
-
-    # =================== TABLA EDITABLE ===================
-    try:
-        from st_aggrid import AgGrid, GridOptionsBuilder, ColumnsAutoSizeMode, GridUpdateMode, JsCode
-
-        disp = round_numeric_for_display(view_df, ndigits=3)
-        disp = rename_for_display(disp, all_cols)
-
-        gb = GridOptionsBuilder.from_dataframe(disp)
-        gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
-
-        # Editables
-        gb.configure_column("Estado", editable=True, cellEditor="agSelectCellEditor",
-                            cellEditorParams={"values": estados}, minWidth=130)
-        gb.configure_column("Prioridad", editable=True, cellEditor="agSelectCellEditor",
-                            cellEditorParams={"values": ["A","B","C"]}, minWidth=90)
-        gb.configure_column("Tags", editable=True, minWidth=160)
-        gb.configure_column("Notas", editable=True, minWidth=220)
-        gb.configure_column("Prox_accion", editable=True, minWidth=140, header_name="Próx. acción (YYYY-MM-DD)")
-        gb.configure_column("Estim_fee", editable=True, minWidth=110, header_name="Estim. fee (€)")
-
-        # Colores por estado/prioridad
-        st_color_estado = JsCode("""
-            function(params){
-              let m={"Observado":"#1f2937","Seguimiento":"#0ea5e9","Informe":"#a78bfa","Candidato":"#22c55e","No procede":"#ef4444"};
-              let c=m[params.value]||"#1f2937"; return {'color':'#fff','backgroundColor':c};
-            }
-        """)
-        st_color_prio = JsCode("""
-            function(params){
-              let m={"A":"#166534","B":"#3f3f46","C":"#7c2d12"}; let c=m[params.value]||"#3f3f46";
-              return {'color':'#fff','backgroundColor':c};
-            }
-        """)
-        gb.configure_column("Estado", cellStyle=st_color_estado)
-        gb.configure_column("Prioridad", cellStyle=st_color_prio)
-
-        grid = AgGrid(
-            disp,
-            gridOptions=gb.build(),
-            theme="streamlit",
-            update_mode=GridUpdateMode.VALUE_CHANGED,
-            columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
-            height=420, allow_unsafe_jscode=True
-        )
-
-        # Sincroniza cambios
-        updated = grid["data"]
-        back_map = {label(c): c for c in all_cols}
-        updated = updated.rename(columns=back_map)
-        st.session_state.shortlist_df.loc[mask, list(updated.columns)] = updated.values
-
-    except Exception:
-        st.caption("Vista simple (instala `st-aggrid` para edición en línea).")
-        st.dataframe(view_df, use_container_width=True, height=420)
-
-    st.markdown("<hr style='opacity:.12;margin:.5rem 0;'>", unsafe_allow_html=True)
-
-    # =================== EXPORTAR / IMPORTAR ===================
-    col_dl, col_ul, col_clear = st.columns([0.4,0.4,0.2])
-    with col_dl:
+        # Descargar shortlist
         st.download_button(
             "⬇️ Descargar shortlist (CSV)",
             data=st.session_state.shortlist_df.to_csv(index=False).encode("utf-8-sig"),
@@ -1286,20 +1356,11 @@ with tab_shortlist:
             mime="text/csv",
             use_container_width=True
         )
-    with col_ul:
-        up = st.file_uploader("Subir shortlist (CSV)", type=["csv"], label_visibility="collapsed")
-        if up is not None:
-            try:
-                new_df = pd.read_csv(up)
-                for c in all_cols:
-                    if c not in new_df.columns: new_df[c] = ""
-                st.session_state.shortlist_df = new_df[all_cols].copy()
-                st.success("Shortlist cargada.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"No pude leer el CSV: {e}")
-    with col_clear:
-        if st.button("🧹 Vaciar shortlist", use_container_width=True):
-            st.session_state.shortlist_df = pd.DataFrame(columns=all_cols)
+
+        # Vaciar
+        if st.button("🧹 Vaciar shortlist", type="secondary", use_container_width=True):
+            st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
             st.rerun()
 
+    st.markdown("<hr class='sh-hr'>", unsafe_allow_html=True)
+    st.caption("Consejo: usa **Tags** para agrupar (ej. 'U23, zurdo, HG') y **Próx. acción** para coordinar el trabajo (vídeo, live, llamada, etc.).")
