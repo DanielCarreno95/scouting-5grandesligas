@@ -73,6 +73,17 @@ def round_numeric_for_display(df: pd.DataFrame, ndigits: int = 3) -> pd.DataFram
         out[num_cols] = out[num_cols].round(ndigits)
     return out
 
+# >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+# NUEVO: helper para crear la clave única por fila (Series 1D)
+def build_row_key(df: pd.DataFrame, cols=("Player","Squad","Season")) -> pd.Series:
+    """Devuelve una Series con la clave única por fila.
+       Si faltan las columnas, usa un índice incremental en texto."""
+    use = [c for c in cols if c in df.columns]
+    if not use:
+        return pd.Series(np.arange(len(df)).astype(str), index=df.index)
+    return df[use].astype(str).agg("|".join, axis=1)
+# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
 # ---------- Nombres “deportivos” para métricas y campos ----------
 METRIC_LABELS = {
     "Player": "Jugador", "Squad": "Equipo", "Season": "Temporada",
@@ -560,7 +571,6 @@ with tab_ranking:
     # si el usuario filtró "Portero" en el sidebar, mostramos SOLO GK
     is_gk_view = False
     try:
-        # variable 'rol' viene del sidebar (multiselect de Rol_Tactico)
         if rol and any(("portero" in str(r).lower()) or ("gk" in str(r).lower()) for r in rol):
             is_gk_view = True
     except NameError:
@@ -634,12 +644,18 @@ with tab_ranking:
         with cols_top[2]:
             st.caption(f"Mostrando **1–{min(topn, n_total_rows)}** de **{n_total_rows}**")
 
+        # >>> CLAVE ANTES DEL RENAME
+        df_full["__key"] = build_row_key(df_full)
+
         df_view = df_full.head(topn).copy()
         cols_ctx = [c for c in ["Rank","Pct (muestra)","Pct (por rol)","Pct (por comp)"] if c in df_view.columns]
         cols_show = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age","Edad (U22/U28)"] + cols_ctx + cols_metrics
 
         tabla_disp_num = round_numeric_for_display(df_view, ndigits=3)
         tabla_disp = rename_for_display(tabla_disp_num, cols_show)
+
+        # Inserta la clave calculada (mantiene longitud)
+        tabla_disp.insert(0, "__key", df_view["__key"].values)
 
         st.caption("🔎 Percentiles calculados sobre la **muestra filtrada** (incluye filtro rápido U22/U28).")
 
@@ -708,7 +724,7 @@ with tab_ranking:
         df_rank["Índice ponderado"] = idx_norm_0_100
         df_rank["Índice Final Métrica"] = idx_final_metrica
 
-        # Top N
+        # Orden + Top N
         df_rank = df_rank.sort_values("Índice Final Métrica", ascending=False)
         n_total_rows = len(df_rank)
         cols_top = st.columns([0.25, 0.25, 0.5])
@@ -720,6 +736,9 @@ with tab_ranking:
         with cols_top[2]:
             st.caption(f"Mostrando **1–{min(topn, n_total_rows)}** de **{n_total_rows}**")
 
+        # >>> CLAVE ANTES DEL RENAME
+        df_rank["__key"] = build_row_key(df_rank)
+
         df_rank = df_rank.head(topn)
         tabla_disp_num = round_numeric_for_display(df_rank, ndigits=3)
         tabla_disp_num["Índice ponderado"] = pd.to_numeric(
@@ -729,6 +748,9 @@ with tab_ranking:
         cols_show = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age","Edad (U22/U28)",
                      "Índice ponderado", "Índice Final Métrica"] + mm_feats
         tabla_disp = rename_for_display(tabla_disp_num, cols_show)
+
+        # Inserta la clave calculada
+        tabla_disp.insert(0, "__key", df_rank["__key"].values)
 
     # ---------- Acciones justo encima de la tabla ----------
     actL, actR = st.columns([0.5, 0.5])
@@ -761,6 +783,9 @@ with tab_ranking:
         gb = GridOptionsBuilder.from_dataframe(tabla_disp)
         gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
 
+        # Si quieres usar la clave como rowId en AgGrid (opcional):
+        # gb.configure_grid_options(getRowId=JsCode("function(p){return p.data.__key;}"))
+
         # primeras columnas legibles
         gb.configure_column(label("Player"), pinned="left", minWidth=240, wrapText=True, autoHeight=True)
         gb.configure_column(label("Squad"),  minWidth=160, wrapText=True, autoHeight=True)
@@ -778,9 +803,7 @@ with tab_ranking:
             function(params) {
                 var v = Number(params.value);
                 if (isNaN(v)) { return {}; }
-                // clamp 0..100
                 var p = Math.max(0, Math.min(100, v));
-                // 0 -> rojo (0º), 50 -> amarillo (60º), 100 -> verde (120º)
                 var hue = p * 1.2; 
                 return {'backgroundColor': 'hsl(' + hue + ', 70%, 32%)', 'color': 'white'};
             }
@@ -788,7 +811,6 @@ with tab_ranking:
         for c in heat_cols:
             gb.configure_column(c, cellStyle=heat_js)
 
-        # zebra
         zebra_js = JsCode("""
             function(params) {
               if (params.node && params.node.rowIndex % 2 === 0) {
@@ -823,7 +845,6 @@ with tab_compare:
     stop_if_empty(dff_view)
     st.subheader("Comparador de jugadores (Radar)")
 
-    # --- Estilos compactos (solo este bloque) ---
     st.markdown("""
     <style>
     .cmp .block-container, .cmp [data-testid="stVerticalBlock"]{gap:.35rem !important}
@@ -838,7 +859,6 @@ with tab_compare:
     c = st.container()
     c.markdown('<div class="cmp">', unsafe_allow_html=True)
 
-    # ---------- PLACEHOLDER KPI (se pintará por encima de los filtros) ----------
     kpi_top = c.container()
     c.caption(
         '<div class="metric-note">Índice agregado (0–100): media de métricas normalizadas seleccionadas. '
@@ -846,7 +866,6 @@ with tab_compare:
         unsafe_allow_html=True
     )
 
-    # ---------- PRESETS POR ROL ----------
     ROLE_PRESETS = {
         "Portero":     ["Save%", "PSxG+/-_per90", "PSxG_per90", "Saves_per90", "CS%"],
         "Central":     ["Tkl+Int_per90", "Int_per90", "Blocks_per90", "Clr_per90", "Recov_per90"],
@@ -1032,7 +1051,6 @@ with tab_similarity:
     stop_if_empty(dff_view)
     st.subheader("Jugadores similares (busca perfiles comparables)")
 
-    # --- estilo compacto ---
     st.markdown("""
     <style>
       .stSelectbox, .stMultiSelect, .stRadio, .stSlider, .stCheckbox,
@@ -1041,7 +1059,6 @@ with tab_similarity:
     </style>
     """, unsafe_allow_html=True)
 
-    # ---------- Presets por rol (define MÉTRICAS del perfil) ----------
     ROLE_PRESETS = {
         "Portero":   ["Save%", "PSxG+/-_per90", "PSxG_per90", "Saves_per90", "CS%"],
         "Central":   ["Tkl+Int_per90", "Int_per90", "Blocks_per90", "Clr_per90", "Recov_per90"],
@@ -1051,27 +1068,22 @@ with tab_similarity:
         "Delantero":["Gls_per90", "xG_per90", "NPxG_per90", "SoT_per90", "xA_per90"],
     }
 
-    # ---------- 1) KPIs (se rellenan tras filtros) ----------
     kpi_box = st.container()
 
     st.markdown("<hr style='opacity:.12;margin:.35rem 0;'>", unsafe_allow_html=True)
-
-    # ==================== 2) FILTROS ====================
 
     # Jugador objetivo: SOLO campo de texto
     all_players = sorted(dff_view["Player"].dropna().unique().tolist())
     typed = st.text_input("Jugador objetivo (escribe el nombre)", value="", placeholder="Ej.: Nico Williams", key="sim_obj_q")
 
-    # Resolución del texto a un jugador del universo (tolerante)
     candidates = [p for p in all_players if typed.lower() in p.lower()] if typed else all_players
     if not candidates:
         st.warning("No encontramos ese nombre en el universo activo. Ajusta el texto o los filtros globales.")
         st.stop()
-    ref_player = candidates[0]   # toma el primer match como referencia
+    ref_player = candidates[0]
     if typed and len(candidates) > 1:
         st.caption(f"Coincidencias: {len(candidates)} · Usando **{ref_player}** como referencia.")
 
-    # Rol táctico para CONSTRUIR el perfil (métricas)
     c1, c2 = st.columns([0.70, 0.30])
     with c1:
         preset_sel = st.selectbox("Rol táctico para construir el perfil (métricas)",
@@ -1084,7 +1096,6 @@ with tab_similarity:
             st.success(f"Perfil de métricas cargado: {preset_sel} · {len(preset_feats)} métricas.")
             st.rerun()
 
-    # Selección de métricas del perfil
     metric_pool = [c for c in dff_view.columns if c.endswith("_per90") or c in ["Cmp%","Save%"]]
     default_feats = st.session_state.get("sim_feats", ROLE_PRESETS.get(preset_sel, [])) or metric_pool[:8]
     feats = st.multiselect("Métricas del perfil (elige 6–12)", options=metric_pool, default=default_feats,
@@ -1093,11 +1104,9 @@ with tab_similarity:
         st.info("El perfil necesita al menos 6 métricas para comparar bien.")
         st.stop()
 
-    # Importancia por métrica
     with st.expander("⚖️ Importancia de métricas (0.0–2.0)", expanded=True):
         weights = {f: st.slider(label(f), 0.0, 2.0, 1.0, 0.1, key=f"sim_w_{f}") for f in feats}
 
-    # Contexto y filtros operativos
     r1, r2, r3 = st.columns([1,1,1])
     ctx_mode = r1.selectbox("Contexto de referencia (para escalar)", ["Muestra filtrada", "Por rol táctico", "Por competición"], index=0)
     excl_team = r2.toggle("Excluir mismo equipo", value=False)
@@ -1108,15 +1117,11 @@ with tab_similarity:
     band = r5.selectbox("Banda de edad", ["Todas","U22 (≤22)","U28 (≤28)"], index=0)
     topn = r6.slider("Top N resultados", 5, 100, 25)
 
-    # Rol táctico para FILTRAR la lista (posiciones a buscar en el mercado)
     role_options = sorted(dff_view.get("Rol_Tactico", pd.Series(dtype=str)).dropna().unique().tolist())
     role_filter = st.multiselect("Roles a buscar en el mercado (filtra la lista)", role_options, key="sim_role_market")
 
     st.markdown("<hr style='opacity:.12;margin:.35rem 0;'>", unsafe_allow_html=True)
 
-    # ==================== Cálculo del parecido ====================
-
-    # Contexto de referencia
     def _mask_ctx(df_in: pd.DataFrame) -> pd.Series:
         if ctx_mode == "Muestra filtrada":
             return pd.Series(True, index=df_in.index)
@@ -1133,7 +1138,6 @@ with tab_similarity:
     pool = dff_view[_mask_ctx(dff_view)].copy()
     stop_if_empty(pool)
 
-    # Filtros operativos
     if "Min" in pool: pool = pool[pool["Min"].fillna(0) >= min_minutes]
     if band != "Todas" and "Age" in pool:
         age_num = pd.to_numeric(pool["Age"], errors="coerce")
@@ -1146,7 +1150,6 @@ with tab_similarity:
         pool = pool[pool["Rol_Tactico"].isin(role_filter)]
     stop_if_empty(pool)
 
-    # Normalización y pesos
     feats = [f for f in feats if f in pool.columns]
     X_raw = pool[feats].astype(float).copy()
     Xn = (X_raw - X_raw.min()) / (X_raw.max() - X_raw.min() + 1e-9)
@@ -1156,7 +1159,6 @@ with tab_similarity:
     w = _np.array([weights[f] for f in feats], dtype=float)
     w = w / (w.sum() + 1e-9)
 
-    # Vector del objetivo
     if any(pool["Player"] == ref_player):
         v = Xn[pool["Player"] == ref_player].mean(axis=0).to_numpy()
         pool_no_ref = pool[pool["Player"] != ref_player].copy()
@@ -1172,20 +1174,17 @@ with tab_similarity:
         pool_no_ref = pool.copy()
         X_no_ref = Xn.copy()
 
-    # Cosine ponderado (parecido 0–1)
     v_w = v * w
     V_unit = v_w / (_np.linalg.norm(v_w) + 1e-12)
     U = X_no_ref.to_numpy() * w
     U_unit = U / (_np.linalg.norm(U, axis=1, keepdims=True) + 1e-12)
     sim = (U_unit @ V_unit)
 
-    # Métricas que más empujan el parecido (top-3 por jugador)
     contrib = U_unit * V_unit
     feat_labels = [label(f) for f in feats]
     idx_top3 = _np.argsort(-contrib, axis=1)[:, :3]
     why3 = [", ".join([feat_labels[i] for i in idx_row]) for idx_row in idx_top3]
 
-    # ---------- 1) KPIs pintados ahora ----------
     with kpi_box:
         k1, k2, k3, k4 = st.columns(4, gap="small")
         k1.metric("Jugadores en el universo", f"{len(pool):,}")
@@ -1193,11 +1192,9 @@ with tab_similarity:
         k3.metric("Edad media (universo)", f"{pd.to_numeric(pool['Age'], errors='coerce').mean():.1f}" if "Age" in pool else "—")
         k4.metric("Dispersión media (métricas)", f"{float(Xn.var().mean()):.3f}")
 
-    # ==================== 3) Tabla + 4) Perfil ====================
     st.markdown("### Resultados")
     left, right = st.columns([0.62, 0.38], gap="large")
 
-    # ---- Tabla (izquierda) ----
     with left:
         cols_id = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]
         out = pool_no_ref[cols_id].copy()
@@ -1238,7 +1235,6 @@ with tab_similarity:
             mime="text/csv", key="sim_dl_csv"
         )
 
-    # ---- Perfil (derecha): fortalezas y áreas a mejorar del OBJETIVO vs universo ----
     with right:
         st.markdown("### Perfil del objetivo (vs contexto elegido)")
         mask_ref = (pool["Player"] == ref_player)
@@ -1265,21 +1261,19 @@ with tab_similarity:
 with tab_shortlist:
     st.subheader("Shortlist (lista de seguimiento)")
 
-    # --------- setup ---------
     base_cols = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]
     meta_cols = ["Estado","Prioridad","Tags","Notas","Prox_accion","Estim_fee","Origen"]
     core_cols = base_cols + meta_cols
-    estado_opts = ["Observado","Seguimiento","Candidato","No procede"]  # ← sin “Informe”
+    estado_opts = ["Observado","Seguimiento","Candidato","No procede"]
 
     if "shortlist_df" not in st.session_state:
         st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
 
-    # ======== util: adjuntar métricas del universo a cada fila de shortlist ========
     def attach_metric_columns(shdf_in: pd.DataFrame, metrics_to_add: list) -> pd.DataFrame:
         if not metrics_to_add:
             return shdf_in.copy()
         sh = shdf_in.copy()
-        uni = dff_view.copy()  # universo actual
+        uni = dff_view.copy()
 
         by_player_mean = (
             uni.groupby("Player")[metrics_to_add]
@@ -1291,7 +1285,6 @@ with tab_shortlist:
         right_cols = match_cols + metrics_to_add
         mrg = pd.merge(sh, uni[right_cols], on=match_cols, how="left")
 
-        # completa con media por jugador si faltan métricas exactas
         mrg = pd.merge(mrg, by_player_mean, on="Player", how="left", suffixes=("", "__ply"))
         for m in metrics_to_add:
             if m in mrg.columns and f"{m}__ply" in mrg.columns:
@@ -1299,7 +1292,6 @@ with tab_shortlist:
                 mrg.drop(columns=[f"{m}__ply"], inplace=True)
         return mrg
 
-    # ======== estilos compactos ========
     st.markdown("""
     <style>
       .sh-compact label, .sh-compact div[role="radiogroup"], .sh-compact .stTextInput, 
@@ -1308,7 +1300,6 @@ with tab_shortlist:
     </style>
     """, unsafe_allow_html=True)
 
-    # ===================== 1) KPIs =====================
     shdf = st.session_state.shortlist_df.copy()
     def _c(est): return int((shdf["Estado"]==est).sum()) if len(shdf) else 0
 
@@ -1324,7 +1315,6 @@ with tab_shortlist:
 
     st.markdown("<hr class='sh-hr'>", unsafe_allow_html=True)
 
-    # ===================== 2) Alta de jugador (ficha rápida de scouting) =====================
     st.markdown("**➕ Alta de jugador** · define su estado, prioridad y próximas acciones (lenguaje de scouting).")
     with st.container():
         c1, c2 = st.columns([0.62, 0.38])
@@ -1399,18 +1389,15 @@ extra_metrics = st.multiselect(
     key="sh_extra_metrics"
 )
 
-# Columnas base/metadata (garantizamos el DF en sesión)
 base_cols = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]
 meta_cols = ["Estado","Prioridad","Tags","Notas","Prox_accion","Estim_fee","Origen"]
 core_cols = base_cols + meta_cols
 if "shortlist_df" not in st.session_state:
     st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
 
-# Adjunta métricas (solo visual; nunca sobreescribe core)
 def attach_metric_columns(shdf_in: pd.DataFrame, metrics_to_add: list) -> pd.DataFrame:
     out = shdf_in.copy()
     if not metrics_to_add or out.empty:
-        # si no hay métricas, aseguro columnas vacías para que no casque el editor
         for m in (metrics_to_add or []):
             if m not in out.columns:
                 out[m] = np.nan
@@ -1421,7 +1408,6 @@ def attach_metric_columns(shdf_in: pd.DataFrame, metrics_to_add: list) -> pd.Dat
     right_cols = [c for c in match_cols + metrics_to_add if c in uni.columns]
     out = pd.merge(out, uni[right_cols], on=match_cols, how="left")
 
-    # completa con medias por jugador si faltan métricas exactas
     by_pl = uni.groupby("Player")[metrics_to_add].mean(numeric_only=True).reset_index()
     out = pd.merge(out, by_pl, on="Player", how="left", suffixes=("", "__ply"))
     for m in metrics_to_add:
@@ -1436,25 +1422,20 @@ table_df = attach_metric_columns(st.session_state.shortlist_df, extra_metrics).c
 left, right = st.columns([0.77, 0.23], gap="large")
 
 with left:
-    # DF visible en el editor (no renombramos columnas para evitar inconsistencias)
     show_cols = core_cols + extra_metrics
     tbl = table_df.reindex(columns=show_cols, fill_value="").copy()
 
-    # Columna de selección (persistida en sesión por si el DF cambia)
     if "shortlist_sel_ids" not in st.session_state:
-        st.session_state.shortlist_sel_ids = []  # lista de claves "Player|Squad|Season"
+        st.session_state.shortlist_sel_ids = []
 
-    # construimos clave única por fila para gestionar selección de forma robusta
     if len(tbl):
         row_key = tbl[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
     else:
         row_key = pd.Series([], dtype=str)
 
-    # insertamos columna bool 'Sel' usando el estado previo
     sel_col = row_key.isin(set(st.session_state.shortlist_sel_ids))
     tbl.insert(0, "Sel", sel_col.values if len(tbl) else [])
 
-    # Config de columnas (etiquetas amigables; internas se quedan con su nombre)
     cfg = {
         "Sel": st.column_config.CheckboxColumn("Sel", help="Marca la fila para eliminarla", width="small"),
         "Player":      st.column_config.TextColumn(METRIC_LABELS["Player"], disabled=True),
@@ -1476,7 +1457,6 @@ with left:
     for m in extra_metrics:
         cfg[m] = st.column_config.NumberColumn(METRIC_LABELS.get(m, m), disabled=True)
 
-    # ---------- FORMULARIO ----------
     with st.form("sh_table_form", clear_on_submit=False):
         edited = st.data_editor(
             tbl,
@@ -1486,19 +1466,15 @@ with left:
             num_rows="fixed",
             key="sh_editor_stable",
         )
-        # Botón de formulario: consolidamos selección y ediciones en UNA sola pasada (sin reruns intermedios)
         form_ok = st.form_submit_button("Aplicar cambios y actualizar selección")
 
-    # Tras el submit del formulario:
     to_delete_keys = []
     if form_ok:
-        # 1) Actualiza selección persistente
         if len(edited):
             sel_mask = edited["Sel"].fillna(False)
             sel_ids = edited.loc[sel_mask, ["Player","Squad","Season"]].astype(str).agg("|".join, axis=1).tolist()
-            st.session_state.shortlist_sel_ids = sel_ids  # persistimos
+            st.session_state.shortlist_sel_ids = sel_ids
 
-            # 2) Guardar ediciones de METADATA en el df base
             upd_meta = edited[["Player","Squad","Season"] + meta_cols].copy()
             if len(st.session_state.shortlist_df):
                 idx_base = st.session_state.shortlist_df.set_index(["Player","Squad","Season"])
@@ -1508,7 +1484,6 @@ with left:
                         idx_base.loc[idx_upd.index, c] = idx_upd[c]
                 st.session_state.shortlist_df = idx_base.reset_index()[core_cols]
 
-    # claves actualmente seleccionadas (persisten entre reruns)
     to_delete_keys = st.session_state.get("shortlist_sel_ids", [])
 
 with right:
@@ -1519,17 +1494,14 @@ with right:
     else:
         st.caption("Marca la casilla **Sel** en la(s) fila(s) y pulsa *Aplicar cambios y actualizar selección*.")
 
-    # Eliminar seleccionado(s) — borra solo las claves marcadas
     if st.button("🗑️ Eliminar seleccionado(s)", use_container_width=True, disabled=(len(to_delete_keys) == 0)):
         if len(st.session_state.shortlist_df) and to_delete_keys:
             cur_keys = st.session_state.shortlist_df[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
             keep_mask = ~cur_keys.isin(set(to_delete_keys))
             st.session_state.shortlist_df = st.session_state.shortlist_df.loc[keep_mask].reset_index(drop=True)
-        # limpia selección después de borrar
         st.session_state.shortlist_sel_ids = []
         st.rerun()
 
-    # Descargar CSV
     st.download_button(
         "⬇️ Descargar shortlist (CSV)",
         data=st.session_state.shortlist_df.to_csv(index=False).encode("utf-8-sig"),
@@ -1538,11 +1510,8 @@ with right:
         use_container_width=True
     )
 
-    # (Opcional) Vaciar shortlist de forma segura (si prefieres quitarlo, comenta este bloque)
     if st.button("🧹 Vaciar shortlist (seguro)", type="secondary", use_container_width=True,
                  disabled=(len(st.session_state.shortlist_df) == 0)):
         st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
         st.session_state.shortlist_sel_ids = []
         st.rerun()
-
-
