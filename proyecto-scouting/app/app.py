@@ -1231,55 +1231,62 @@ with tab_shortlist:
 
     st.markdown("<hr class='sh-hr'>", unsafe_allow_html=True)
 
-    # ===================== 3) Métricas extra para la tabla =====================
-    all_metric_candidates = [c for c in dff_view.columns if (c.endswith("_per90") or c in ["Cmp%","Save%"])]
-    extra_metrics = st.multiselect(
-        "Añadir columnas de métricas a la tabla (del universo actual)",
-        options=sorted(all_metric_candidates),
-        default=[],
-        format_func=lambda c: METRIC_LABELS.get(c,c),
-        key="sh_extra_metrics"
-    )
-    table_df = attach_metric_columns(st.session_state.shortlist_df, extra_metrics)
+  # ===================== 3) Métricas extra para la tabla =====================
+all_metric_candidates = [c for c in dff_view.columns if (c.endswith("_per90") or c in ["Cmp%","Save%"])]
+extra_metrics = st.multiselect(
+    "Añadir columnas de métricas a la tabla (del universo actual)",
+    options=sorted(all_metric_candidates),
+    default=[],
+    format_func=lambda c: METRIC_LABELS.get(c, c),
+    key="sh_extra_metrics",
+)
 
-    # Mostrar nombres “bonitos”
-    show_cols = core_cols + extra_metrics
-    disp_df = round_numeric_for_display(table_df.reindex(columns=show_cols, fill_value=""), ndigits=3)
-    disp_df_ren = rename_for_display(disp_df, show_cols)
+# df base para pintar + métrica extra (si las hay)
+table_df = attach_metric_columns(st.session_state.shortlist_df, extra_metrics).copy()
 
- # ===================== 4) Tabla + Acciones a la derecha (sin AgGrid) =====================
+# columnas a mostrar
+show_cols = core_cols + extra_metrics
+for c in show_cols:
+    if c not in table_df.columns:
+        table_df[c] = ""   # garantiza existencia de todas las columnas de salida
+
+# ---------- clave estable por fila (para editar/borrar) ----------
+if len(table_df):
+    table_df["_key"] = table_df[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
+else:
+    table_df["_key"] = pd.Series(dtype=str)
+
+# ---------- versiones “bonitas” para el usuario ----------
+disp_df = round_numeric_for_display(table_df[show_cols + ["_key"]], ndigits=3)
+disp_df_ren = rename_for_display(disp_df, show_cols + ["_key"])   # renombra solo visibles
+
+# ===================== 4) Tabla + Acciones a la derecha =====================
 left, right = st.columns([0.77, 0.23], gap="large")
 
 with left:
-    # 1) Preparamos la tabla “bonita” + columna de selección
+    # 1) tabla editable con checkbox de selección
     tbl = disp_df_ren.copy().reset_index(drop=True)
 
-    # recordamos la fila seleccionada entre reruns
-    if "sh_sel_row" not in st.session_state:
-        st.session_state.sh_sel_row = -1
-
-    # columna de selección (checkbox)
+    # columna de selección
     if "Sel" not in tbl.columns:
         tbl.insert(0, "Sel", False)
-    if 0 <= st.session_state.sh_sel_row < len(tbl):
-        tbl.loc[st.session_state.sh_sel_row, "Sel"] = True
 
-    # 2) Configuración de columnas (selects, fecha, etc.)
+    # config de columnas
     cfg = {
         "Sel": st.column_config.CheckboxColumn(
-            "Sel", help="Marca una fila para activar acciones", width="small"
+            "Sel", help="Marca una o varias filas para aplicar acciones", width="small"
         ),
-        "Estado": st.column_config.SelectboxColumn(
+        METRIC_LABELS.get("Estado","Estado"): st.column_config.SelectboxColumn(
             "Estado", options=["Observado","Seguimiento","Candidato","No procede"]
         ),
-        "Prioridad": st.column_config.SelectboxColumn(
+        METRIC_LABELS.get("Prioridad","Prioridad"): st.column_config.SelectboxColumn(
             "Prioridad", options=["A","B","C"]
         ),
-        "Próx. acción (YYYY-MM-DD)": st.column_config.DateColumn(format="YYYY-MM-DD"),
-        "Estim. fee (€)": st.column_config.TextColumn(),
+        METRIC_LABELS.get("Prox_accion","Próx. acción (YYYY-MM-DD)"): st.column_config.DateColumn(format="YYYY-MM-DD"),
+        METRIC_LABELS.get("Estim_fee","Estim. fee (€)"): st.column_config.TextColumn(),
+        "_key": st.column_config.Column("_key", width="small", help="id interno", disabled=True, visible=False),
     }
 
-    # 3) Editor (estable, sin JS externo)
     edited = st.data_editor(
         tbl,
         column_config=cfg,
@@ -1289,51 +1296,41 @@ with left:
         key="sh_editor",
     )
 
-    # 4) ¿Qué fila quedó marcada?
-    sel_rows = edited.index[edited["Sel"] == True].tolist()
-    sel_idx = sel_rows[0] if sel_rows else -1
-    st.session_state.sh_sel_row = sel_idx
+    # 2) filas marcadas -> claves internas
+    selected_keys = edited.loc[edited["Sel"] == True, "_key"].tolist()
 
-    # 5) Mapeo “nombres bonitos” -> reales para clave y guardado
-    selected_key = None
-    back_map = {METRIC_LABELS.get(c, c): c for c in show_cols}
+    # 3) guardar ediciones (mapeo nombres bonitos -> reales)
+    back_map = {METRIC_LABELS.get(c, c): c for c in show_cols + ["_key"]}
+    edited_back = edited.rename(columns=back_map)
 
-    if sel_idx != -1:
-        row_core = edited.drop(columns=["Sel"]).rename(columns=back_map).iloc[sel_idx]
+    # solo actualizamos columnas del core (editables) y respetamos _key como índice
+    core_editables = ["Estado","Prioridad","Tags","Notas","Prox_accion","Estim_fee","Origen"]
+    if len(edited_back):
         try:
-            selected_key = tuple(row_core[["Player","Squad","Season"]].tolist())
+            new_core = edited_back[["_key"] + base_cols + core_editables].copy().set_index("_key")
+            base_keyed = table_df[["_key"] + base_cols + core_editables].copy().set_index("_key")
+            base_keyed.update(new_core)   # aplica cambios
+            # reconstruimos session_state.shortlist_df SOLO con core_cols (sin extras)
+            st.session_state.shortlist_df = base_keyed.reset_index(drop=True)[base_cols + core_editables]
         except Exception:
-            selected_key = None
-
-    # 6) Guardamos ediciones en el df base (solo columnas core editables)
-    edited_core = edited.drop(columns=["Sel"]).rename(columns=back_map)
-
-    key_cols = ["Player","Squad","Season"]
-    sh_base = st.session_state.shortlist_df.copy().set_index(key_cols)
-    upd_core = edited_core.set_index(key_cols)
-
-    common_cols = list(set(core_cols) & set(upd_core.columns))
-    if common_cols:
-        sh_base.loc[upd_core.index, common_cols] = upd_core[common_cols]
-        st.session_state.shortlist_df = sh_base.reset_index()
+            # si algo falla, no rompas la app
+            pass
 
 with right:
     st.markdown("### Acciones")
-    if selected_key is not None:
-        st.success(f"Seleccionado: {selected_key[0]} — {selected_key[1]} — {selected_key[2]}")
+    if selected_keys:
+        st.success(f"{len(selected_keys)} jugador(es) seleccionado(s)")
     else:
-        st.caption("Marca una fila para activar las acciones sobre ese jugador.")
+        st.caption("Marca una o varias filas para activar las acciones.")
 
-    # Eliminar seleccionado
-    disabled_del = (selected_key is None)
-    if st.button("🗑️ Eliminar seleccionado", use_container_width=True, disabled=disabled_del):
-        if selected_key:
-            mask = ~(
-                (st.session_state.shortlist_df["Player"]==selected_key[0]) &
-                (st.session_state.shortlist_df["Squad"]==selected_key[1]) &
-                (st.session_state.shortlist_df["Season"]==selected_key[2])
-            )
-            st.session_state.shortlist_df = st.session_state.shortlist_df[mask].copy()
+    # Eliminar seleccionados (1..n)
+    if st.button("🗑️ Eliminar seleccionado(s)", use_container_width=True, disabled=(len(selected_keys)==0)):
+        if len(selected_keys):
+            # construimos la misma clave en el df base para filtrar con seguridad
+            if len(st.session_state.shortlist_df):
+                base_keys = st.session_state.shortlist_df[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
+                keep_mask = ~base_keys.isin(set(selected_keys))
+                st.session_state.shortlist_df = st.session_state.shortlist_df.loc[keep_mask].reset_index(drop=True)
             st.rerun()
 
     # Descargar shortlist
@@ -1345,7 +1342,8 @@ with right:
         use_container_width=True
     )
 
-    # Vaciar
-    if st.button("🧹 Vaciar shortlist", type="secondary", use_container_width=True):
+    # Vaciar (sin errores aunque quede vacío)
+    if st.button("🧹 Vaciar shortlist", type="secondary", use_container_width=True,
+                 help="Elimina todos los jugadores de la lista"):
         st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
         st.rerun()
