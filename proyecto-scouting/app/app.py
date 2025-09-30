@@ -338,10 +338,200 @@ def render_overview_block(df_in: pd.DataFrame) -> None:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-# ===================== OVERVIEW ==========================
-with tab_overview:
-    stop_if_empty(dff_view)
-    render_overview_block(dff_view)
+# ================================
+# =======  OVERVIEW (Pro)  =======
+# ================================
+# Requiere: dff ya filtrado por tus controles laterales
+
+import plotly.express as px
+
+# --- Presets por rol (los tuyos) ---
+ROLE_PRESETS = {
+    "Portero":   ["Save%", "PSxG+/-_per90", "PSxG_per90", "Saves_per90", "CS%"],
+    "Central":   ["Tkl+Int_per90", "Int_per90", "Blocks_per90", "Clr_per90", "Recov_per90"],
+    "Lateral":   ["PPA_per90", "PrgP_per90", "Carries_per90", "Tkl+Int_per90", "1/3_per90"],
+    "Mediocentro": ["xA_per90", "PrgP_per90", "Recov_per90", "Pressures_per90", "TotDist_per90"],
+    "Volante":  ["xA_per90", "KP_per90", "GCA90_per90", "PrgP_per90", "SCA_per90"],
+    "Delantero":["Gls_per90", "xG_per90", "NPxG_per90", "SoT_per90", "xA_per90"],
+}
+
+# --- Nombres “futboleros” para ejes, tablas y tooltips ---
+METRIC_LABELS = {
+    "Gls_per90":"Goles por 90′",
+    "xG_per90":"xG por 90′ (calidad de tiro)",
+    "NPxG_per90":"xG sin penaltis por 90′",
+    "SoT_per90":"Tiros a puerta por 90′",
+    "xA_per90":"Asistencias esperadas por 90′",
+    "KP_per90":"Pases clave por 90′",
+    "GCA90_per90":"Acciones que acaban en gol por 90′",
+    "SCA_per90":"Acciones que acaban en tiro por 90′",
+    "PrgP_per90":"Pases progresivos por 90′",
+    "Carries_per90":"Conducciones por 90′",
+    "PPA_per90":"Pases al área por 90′",
+    "1/3_per90":"Pases al último tercio por 90′",
+    "Tkl+Int_per90":"Entradas + Intercepciones por 90′",
+    "Int_per90":"Intercepciones por 90′",
+    "Blocks_per90":"Bloqueos por 90′",
+    "Clr_per90":"Despejes por 90′",
+    "Recov_per90":"Recuperaciones por 90′",
+    "Pressures_per90":"Presiones por 90′",
+    "TotDist_per90":"Distancia total de pase por 90′",
+    "Cmp%":"Precisión de pase",
+    "Cmp_per90":"Pases completados por 90′",
+    "Save%":"% de paradas",
+    "PSxG+/-_per90":"PSxG +/- por 90′ (valor de paradas)",
+    "PSxG_per90":"xG a puerta en contra por 90′",
+    "Saves_per90":"Paradas por 90′",
+    "CS%":"% porterías a cero",
+    "Launch%":"% saques en largo",
+    "Min":"Minutos",
+}
+
+def L(col):  # label amigable
+    return METRIC_LABELS.get(col, col)
+
+# Colores por rol táctico
+ROLE_PALETTE = {
+    "Delantero":"#E45756",
+    "Volante":"#54A24B",
+    "Mediocentro":"#3BA99C",
+    "Lateral":"#4C78A8",
+    "Central":"#2F5597",
+    "Portero":"#7F3C8D",
+}
+
+def ensure_numeric(df, cols):
+    out = df.copy()
+    for c in cols:
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+    return out
+
+def fmt_pct(x):
+    try: return f"{float(x):.1f}%"
+    except: return x
+
+def top_leaderboard(dfi, metric, n=12):
+    cols = ["Player","Squad","Season","Pos","Rol_Tactico","Comp","Min",metric]
+    cols = [c for c in cols if c in dfi.columns]
+    t = dfi[cols].sort_values(metric, ascending=False).head(n).copy()
+    if "%" in metric: t[metric] = t[metric].apply(fmt_pct)
+    t = t.rename(columns={metric: L(metric), "Rol_Tactico": "Rol"})
+    return t
+
+# ---------- Cabecera ----------
+st.markdown("""
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+  <div style="font-size:26px;font-weight:800;">Scouting Hub — Overview</div>
+  <div style="padding:2px 8px;border-radius:999px;background:#1f77b4;color:#fff;font-size:12px">Primera lectura</div>
+</div>
+<p style="color:#9aa0a6;margin-top:-6px">
+Lectura rápida para ojeo: jugadores con ≥900′. Métricas por 90’ y porcentajes (0–100). 
+Elige el rol que quieres mirar y te enseñamos lo importante.
+</p>
+""", unsafe_allow_html=True)
+
+k1,k2,k3,k4 = st.columns(4)
+k1.metric("Jugadores (filtro)", f"{len(dff):,}")
+k2.metric("Equipos", dff["Squad"].nunique() if "Squad" in dff else 0)
+k3.metric("Edad media", f"{pd.to_numeric(dff.get('Age'), errors='coerce').mean():.1f}")
+k4.metric("Min medianos", f"{pd.to_numeric(dff.get('Min'), errors='coerce').median():,.0f}")
+
+# ---------- Selector de “rol foco” ----------
+rol_foco = st.segmented_control(
+    "¿Qué rol quieres analizar?",
+    options=list(ROLE_PRESETS.keys()),
+    default="Delantero"
+)
+
+# Subconjunto por rol foco (si existe en columna)
+df_rol = dff.copy()
+if "Rol_Tactico" in dff.columns:
+    df_rol = dff[dff["Rol_Tactico"].eq(rol_foco)] if rol_foco in dff["Rol_Tactico"].unique() else dff
+
+# ---------- TOPs del rol elegido ----------
+st.subheader("🏆 Mejores del rol (Top N)")
+
+metrics_focus = [m for m in ROLE_PRESETS[rol_foco] if m in df_rol.columns]
+topN = st.slider("Tamaño del ranking", 5, 30, 12, key="top_role")
+cA, cB, cC = st.columns(3)
+cols_cycle = (cA, cB, cC) * 3
+
+for metric, col in zip(metrics_focus, cols_cycle):
+    tbl = top_leaderboard(ensure_numeric(df_rol, [metric]), metric, n=topN)
+    col.markdown(f"**{L(metric)}**")
+    col.dataframe(tbl, use_container_width=True, height=360)
+
+# ---------- Dispersión “explicativa” según rol ----------
+st.subheader("🔎 Mapa de jugadores (rol seleccionado)")
+# pares de ejes por rol (x, y, tamaño)
+SCATTER_BY_ROLE = {
+    "Delantero":   ("xG_per90","Gls_per90","Min"),
+    "Volante":     ("xA_per90","KP_per90","GCA90_per90"),
+    "Mediocentro": ("PrgP_per90","Recov_per90","Cmp_per90"),
+    "Lateral":     ("PrgP_per90","PPA_per90","Carries_per90"),
+    "Central":     ("Tkl+Int_per90","Recov_per90","Int_per90"),
+    "Portero":     ("Save%","PSxG+/-_per90","Saves_per90"),
+}
+xcol, ycol, sizecol = SCATTER_BY_ROLE[rol_foco]
+present = all(c in dff.columns for c in [xcol, ycol])  # tamaño opcional
+
+if present:
+    base = df_rol if not df_rol.empty else dff
+    ss = ensure_numeric(base, [xcol,ycol] + ([sizecol] if sizecol in base.columns else []))
+    fig = px.scatter(
+        ss, x=xcol, y=ycol,
+        size=sizecol if sizecol in ss.columns else None,
+        color="Rol_Tactico" if "Rol_Tactico" in ss else None,
+        color_discrete_map=ROLE_PALETTE,
+        hover_data=[c for c in ["Player","Squad","Season","Pos","Min"] if c in ss.columns],
+        title=f"{L(xcol)} vs {L(ycol)}" + (f" (tamaño = {L(sizecol)})" if sizecol in ss.columns else "")
+    )
+    fig.update_xaxes(title=L(xcol))
+    fig.update_yaxes(title=L(ycol))
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("No hay columnas suficientes para este mapa en tu dataset.")
+
+# ---------- Beeswarm por rol (distribución de una métrica clave del rol) ----------
+st.subheader("🐝 ¿Dónde se sitúa cada jugador del rol?")
+m_default = metrics_focus[0] if metrics_focus else None
+metric_opt = st.selectbox(
+    "Elige una métrica del rol",
+    metrics_focus,
+    index=0 if m_default else None,
+    format_func=L,
+    key="bees_metric"
+)
+if metric_opt:
+    s = ensure_numeric(df_rol if not df_rol.empty else dff, [metric_opt])
+    if "Rol_Tactico" in s.columns:
+        fig = px.strip(
+            s, x=metric_opt, y="Rol_Tactico",
+            color="Rol_Tactico", color_discrete_map=ROLE_PALETTE,
+            hover_data=[c for c in ["Player","Squad","Season","Pos","Min"] if c in s.columns],
+            title=f"Distribución por rol en {L(metric_opt)}"
+        )
+        fig.update_traces(jitter=True, opacity=0.6)
+        fig.update_xaxes(title=L(metric_opt))
+        st.plotly_chart(fig, use_container_width=True)
+
+# ---------- Perfil medio por equipo (heatmap sencillo) ----------
+st.subheader("🌡️ Cómo son los equipos en este rol")
+metrics_heat = [m for m in metrics_focus if m in dff.columns]
+if metrics_heat and "Squad" in dff.columns:
+    # usamos todos los jugadores (no solo df_rol) para tener muestra amplia por equipo
+    agg = ensure_numeric(dff, metrics_heat).groupby("Squad")[metrics_heat].mean().round(3)
+    if not agg.empty:
+        fig = px.imshow(
+            agg.sort_index(),
+            labels=dict(x="Métrica", y="Equipo", color="Media"),
+            aspect="auto",
+            title=f"Perfil medio por 90′ — {rol_foco}"
+        )
+        # renombrar ejes del heatmap a nombres futboleros
+        fig.update_xaxes(ticktext=[L(c) for c in agg.columns], tickvals=list(range(len(agg.columns))))
+        st.plotly_chart(fig, use_container_width=True)
 
 # ===================== RANKING ===========================
 with tab_ranking:
@@ -1386,3 +1576,4 @@ with right:
         st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
         st.session_state.shortlist_sel_ids = []
         st.rerun()
+
