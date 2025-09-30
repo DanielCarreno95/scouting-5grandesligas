@@ -1258,120 +1258,106 @@ with tab_shortlist:
     # Renombrado a nombres “bonitos”
     disp_df_ren = rename_for_display(disp_df, show_cols + ["__key"])
 
-    # ===================== Tabla + Acciones a la derecha =====================
-    left, right = st.columns([0.77, 0.23], gap="large")
+   # ===================== 4) Tabla + Acciones a la derecha (sin AgGrid) =====================
+left, right = st.columns([0.77, 0.23], gap="large")
 
-    with left:
+with left:
+    # 1) Preparamos la tabla “bonita” + columna de selección
+    tbl = disp_df_ren.copy().reset_index(drop=True)
+
+    # recordamos la fila seleccionada entre reruns
+    if "sh_sel_row" not in st.session_state:
+        st.session_state.sh_sel_row = -1
+
+    # columna de selección (checkbox)
+    if "Sel" not in tbl.columns:
+        tbl.insert(0, "Sel", False)
+    if 0 <= st.session_state.sh_sel_row < len(tbl):
+        tbl.loc[st.session_state.sh_sel_row, "Sel"] = True
+
+    # 2) Configuración de columnas (selects, fecha, etc.)
+    cfg = {
+        "Sel": st.column_config.CheckboxColumn(
+            "Sel", help="Marca una fila para activar acciones", width="small"
+        ),
+        "Estado": st.column_config.SelectboxColumn(
+            "Estado", options=["Observado","Seguimiento","Candidato","No procede"]
+        ),
+        "Prioridad": st.column_config.SelectboxColumn(
+            "Prioridad", options=["A","B","C"]
+        ),
+        "Próx. acción (YYYY-MM-DD)": st.column_config.DateColumn(format="YYYY-MM-DD"),
+        "Estim. fee (€)": st.column_config.TextColumn(),
+    }
+
+    # 3) Editor (estable, sin JS externo)
+    edited = st.data_editor(
+        tbl,
+        column_config=cfg,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        key="sh_editor",
+    )
+
+    # 4) ¿Qué fila quedó marcada?
+    sel_rows = edited.index[edited["Sel"] == True].tolist()
+    sel_idx = sel_rows[0] if sel_rows else -1
+    st.session_state.sh_sel_row = sel_idx
+
+    # 5) Mapeo “nombres bonitos” -> reales para clave y guardado
+    selected_key = None
+    back_map = {METRIC_LABELS.get(c, c): c for c in show_cols}
+
+    if sel_idx != -1:
+        row_core = edited.drop(columns=["Sel"]).rename(columns=back_map).iloc[sel_idx]
         try:
-            from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode, JsCode
-            gb = GridOptionsBuilder.from_dataframe(disp_df_ren)
-            gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
-
-            # Campos editables (SIN “Informe”)
-            gb.configure_column("Estado", editable=True, cellEditor="agSelectCellEditor",
-                                cellEditorParams={"values":["Observado","Seguimiento","Candidato","No procede"]}, minWidth=130)
-            gb.configure_column("Prioridad", editable=True, cellEditor="agSelectCellEditor",
-                                cellEditorParams={"values":["A","B","C"]}, minWidth=90)
-            gb.configure_column("Tags", editable=True, minWidth=140)
-            gb.configure_column("Notas", editable=True, minWidth=220)
-            gb.configure_column("Próx. acción (YYYY-MM-DD)", editable=True, minWidth=160)
-            gb.configure_column("Fee estimado (€)", editable=True, minWidth=130)
-
-            # Colores de estado/prioridad
-            st_color_estado = JsCode("""
-              function(params){
-                let m={"Observado":"#1f2937","Seguimiento":"#0ea5e9","Candidato":"#22c55e","No procede":"#ef4444"};
-                let c=m[params.value]||"#1f2937"; return {'color':'#fff','backgroundColor':c};
-              }
-            """)
-            st_color_prio = JsCode("""
-              function(params){
-                let m={"A":"#166534","B":"#3f3f46","C":"#7c2d12"}; let c=m[params.value]||"#3f3f46";
-                return {'color':'#fff','backgroundColor':c};
-              }
-            """)
-            gb.configure_column("Estado", cellStyle=st_color_estado)
-            gb.configure_column("Prioridad", cellStyle=st_color_prio)
-
-            # Ocultar la clave, pero mantenerla para selección
-            gb.configure_column("__key", hide=True)
-            gb.configure_selection("single", use_checkbox=True)
-
-            grid = AgGrid(
-                disp_df_ren,
-                gridOptions=gb.build(),
-                theme="streamlit",
-                update_mode=GridUpdateMode.VALUE_CHANGED | GridUpdateMode.SELECTION_CHANGED,
-                columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
-                height=420,
-                allow_unsafe_jscode=True
-            )
-
-            # Mapear cambios a columnas originales (solo core editables)
-            back_core = {
-                METRIC_LABELS.get("Estado","Estado"): "Estado",
-                METRIC_LABELS.get("Prioridad","Prioridad"): "Prioridad",
-                METRIC_LABELS.get("Tags","Tags"): "Tags",
-                METRIC_LABELS.get("Notas","Notas"): "Notas",
-                METRIC_LABELS.get("Prox_accion","Prox_accion"): "Prox_accion",
-                METRIC_LABELS.get("Estim_fee","Estim_fee"): "Estim_fee",
-                "__key": "__key",
-                METRIC_LABELS.get("Player","Player"): "Player",
-                METRIC_LABELS.get("Squad","Squad"): "Squad",
-                METRIC_LABELS.get("Season","Season"): "Season",
-            }
-            updated = pd.DataFrame(grid["data"]).rename(columns=back_core)
-
-            # Actualizamos core sobre shortlist_df por __key
-            if "__key" in updated.columns and len(updated):
-                base = st.session_state.shortlist_df.copy()
-                base["__key"] = base[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
-                upd_idx = updated.set_index("__key")
-                base = base.set_index("__key")
-                for col in ["Estado","Prioridad","Tags","Notas","Prox_accion","Estim_fee"]:
-                    if col in upd_idx.columns:
-                        base.loc[upd_idx.index, col] = upd_idx[col]
-                st.session_state.shortlist_df = base.reset_index(drop=True)
-
-            # Fila seleccionada → __key
-            selected_rows = grid.get("selected_rows", [])
-            selected_key = None
-            if selected_rows:
-                sr = pd.DataFrame(selected_rows)
-                if "__key" in sr.columns:
-                    selected_key = sr.loc[0, "__key"]
-
+            selected_key = tuple(row_core[["Player","Squad","Season"]].tolist())
         except Exception:
-            st.dataframe(disp_df_ren.drop(columns=["__key"], errors="ignore"), use_container_width=True, height=420)
             selected_key = None
 
-    with right:
-        st.markdown("### Acciones")
+    # 6) Guardamos ediciones en el df base (solo columnas core editables)
+    edited_core = edited.drop(columns=["Sel"]).rename(columns=back_map)
+
+    key_cols = ["Player","Squad","Season"]
+    sh_base = st.session_state.shortlist_df.copy().set_index(key_cols)
+    upd_core = edited_core.set_index(key_cols)
+
+    common_cols = list(set(core_cols) & set(upd_core.columns))
+    if common_cols:
+        sh_base.loc[upd_core.index, common_cols] = upd_core[common_cols]
+        st.session_state.shortlist_df = sh_base.reset_index()
+
+with right:
+    st.markdown("### Acciones")
+    if selected_key is not None:
+        st.success(f"Seleccionado: {selected_key[0]} — {selected_key[1]} — {selected_key[2]}")
+    else:
+        st.caption("Marca una fila para activar las acciones sobre ese jugador.")
+
+    # Eliminar seleccionado
+    disabled_del = (selected_key is None)
+    if st.button("🗑️ Eliminar seleccionado", use_container_width=True, disabled=disabled_del):
         if selected_key:
-            st.success("Jugador seleccionado para actuar.")
-        else:
-            st.caption("Selecciona una fila de la tabla para activar las acciones.")
-
-        # Eliminar seleccionado
-        if st.button("🗑️ Eliminar seleccionado", use_container_width=True, disabled=not bool(selected_key)):
-            if selected_key:
-                mask = ~(st.session_state.shortlist_df[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1) == selected_key)
-                st.session_state.shortlist_df = st.session_state.shortlist_df[mask].copy()
-                st.rerun()
-
-        # Descargar shortlist
-        st.download_button(
-            "⬇️ Descargar shortlist (CSV)",
-            data=st.session_state.shortlist_df.to_csv(index=False).encode("utf-8-sig"),
-            file_name="shortlist_scouting.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-
-        # Vaciar
-        if st.button("🧹 Vaciar shortlist", type="secondary", use_container_width=True):
-            st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
+            mask = ~(
+                (st.session_state.shortlist_df["Player"]==selected_key[0]) &
+                (st.session_state.shortlist_df["Squad"]==selected_key[1]) &
+                (st.session_state.shortlist_df["Season"]==selected_key[2])
+            )
+            st.session_state.shortlist_df = st.session_state.shortlist_df[mask].copy()
             st.rerun()
 
-    st.markdown("<hr class='sh-hr'>", unsafe_allow_html=True)
-    st.caption("Consejo: usa **Tags** para agrupar (p.ej., U23, zurdo, HG) y **Próx. acción** para coordinar la carga de vídeo, live o informes.")
+    # Descargar shortlist
+    st.download_button(
+        "⬇️ Descargar shortlist (CSV)",
+        data=st.session_state.shortlist_df.to_csv(index=False).encode("utf-8-sig"),
+        file_name="shortlist_scouting.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
+
+    # Vaciar
+    if st.button("🧹 Vaciar shortlist", type="secondary", use_container_width=True):
+        st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
+        st.rerun()
+
