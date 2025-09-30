@@ -1,5 +1,9 @@
-[theme]
-primaryColor="#1f77b4"
-backgroundColor="#0E1117"
-secondaryBackgroundColor="#1B1F24"
-textColor="#FAFAFA"
+import pandas as pd
+import numpy as np
+import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
+from pathlib import Path
+
+st.set_option("server.fileWatcherType", "none")  # 👈 AÑADE ESTA LÍNEA
+st.set_page_config(page_title="Scouting LaLiga", layout="wide")
