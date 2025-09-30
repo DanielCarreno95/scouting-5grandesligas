@@ -1231,7 +1231,7 @@ with tab_shortlist:
 
     st.markdown("<hr class='sh-hr'>", unsafe_allow_html=True)
 
-  # ===================== 3) Métricas extra para la tabla =====================
+# ===================== 3) Métricas extra para la tabla =====================
 all_metric_candidates = [c for c in dff_view.columns if (c.endswith("_per90") or c in ["Cmp%","Save%"])]
 extra_metrics = st.multiselect(
     "Añadir columnas de métricas a la tabla (del universo actual)",
@@ -1241,97 +1241,165 @@ extra_metrics = st.multiselect(
     key="sh_extra_metrics",
 )
 
-# df base para pintar + métrica extra (si las hay)
-table_df = attach_metric_columns(st.session_state.shortlist_df, extra_metrics).copy()
+# Universo de shortlist (core)
+base_cols = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]
+meta_cols = ["Estado","Prioridad","Tags","Notas","Prox_accion","Estim_fee","Origen"]
+core_cols = base_cols + meta_cols
 
-# columnas a mostrar
-show_cols = core_cols + extra_metrics
+# DF base que se edita
+short_df = st.session_state.shortlist_df.copy()
+
+# Asegura columnas aunque esté vacío
+for c in core_cols:
+    if c not in short_df.columns:
+        short_df[c] = []
+
+# Clave estable por fila
+if len(short_df):
+    short_df["_key"] = short_df[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
+else:
+    short_df["_key"] = pd.Series(dtype=str)
+
+# Añade métricas del universo activo (solo para pintar)
+def attach_metric_columns(shdf_in: pd.DataFrame, metrics_to_add: list) -> pd.DataFrame:
+    if not metrics_to_add:
+        return shdf_in.copy()
+    sh = shdf_in.copy()
+    if sh.empty:
+        # devuelve estructura vacía con columnas pedidas
+        for m in metrics_to_add:
+            sh[m] = np.nan
+        return sh
+
+    uni = dff_view.copy()
+    match_cols = ["Player","Squad","Season"]
+    right_cols = [c for c in match_cols + metrics_to_add if c in uni.columns]
+
+    # merge directo con coincidencia exacta de temporada/equipo
+    out = pd.merge(sh, uni[right_cols], on=match_cols, how="left")
+
+    # completa con media por jugador si faltan métricas exactas
+    if metrics_to_add:
+        by_player = (
+            uni.groupby("Player")[metrics_to_add].mean(numeric_only=True).reset_index()
+        )
+        out = pd.merge(out, by_player, on="Player", how="left", suffixes=("", "__ply"))
+        for m in metrics_to_add:
+            if m in out.columns and f"{m}__ply" in out.columns:
+                out[m] = pd.to_numeric(out[m], errors="coerce").fillna(
+                    pd.to_numeric(out[f"{m}__ply"], errors="coerce")
+                )
+                out.drop(columns=[f"{m}__ply"], inplace=True)
+
+    return out
+
+table_df = attach_metric_columns(short_df, extra_metrics).copy()
+
+# Asegura todas las columnas visibles
+show_cols = core_cols + extra_metrics + ["_key"]
 for c in show_cols:
     if c not in table_df.columns:
-        table_df[c] = ""   # garantiza existencia de todas las columnas de salida
+        table_df[c] = np.nan
 
-# ---------- clave estable por fila (para editar/borrar) ----------
-if len(table_df):
-    table_df["_key"] = table_df[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
-else:
-    table_df["_key"] = pd.Series(dtype=str)
+# Versión “bonita” para labels
+disp_df = round_numeric_for_display(table_df[show_cols], ndigits=3)
+disp_df = disp_df.rename(columns={c: METRIC_LABELS.get(c, c) for c in disp_df.columns})
 
-# ---------- versiones “bonitas” para el usuario ----------
-disp_df = round_numeric_for_display(table_df[show_cols + ["_key"]], ndigits=3)
-disp_df_ren = rename_for_display(disp_df, show_cols + ["_key"])   # renombra solo visibles
+# Mapeo inverso (bonito -> real)
+back_map = {METRIC_LABELS.get(c, c): c for c in show_cols}
 
-# ===================== 4) Tabla + Acciones a la derecha =====================
+# ===================== 4) Tabla (AgGrid) + Acciones =====================
 left, right = st.columns([0.77, 0.23], gap="large")
 
 with left:
-    # 1) tabla editable con checkbox de selección
-    tbl = disp_df_ren.copy().reset_index(drop=True)
+    if len(disp_df) == 0:
+        st.info("Tu shortlist está vacía. Añade jugadores arriba y aquí podrás gestionarlos.")
+        grid_sel_keys = []
+    else:
+        from st_aggrid import AgGrid, GridOptionsBuilder, ColumnsAutoSizeMode, GridUpdateMode, JsCode
 
-    # columna de selección
-    if "Sel" not in tbl.columns:
-        tbl.insert(0, "Sel", False)
+        # Construcción de AgGrid
+        gb = GridOptionsBuilder.from_dataframe(disp_df)
+        gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
 
-    # config de columnas
-    cfg = {
-        "Sel": st.column_config.CheckboxColumn(
-            "Sel", help="Marca una o varias filas para aplicar acciones", width="small"
-        ),
-        METRIC_LABELS.get("Estado","Estado"): st.column_config.SelectboxColumn(
-            "Estado", options=["Observado","Seguimiento","Candidato","No procede"]
-        ),
-        METRIC_LABELS.get("Prioridad","Prioridad"): st.column_config.SelectboxColumn(
-            "Prioridad", options=["A","B","C"]
-        ),
-        METRIC_LABELS.get("Prox_accion","Próx. acción (YYYY-MM-DD)"): st.column_config.DateColumn(format="YYYY-MM-DD"),
-        METRIC_LABELS.get("Estim_fee","Estim. fee (€)"): st.column_config.TextColumn(),
-        "_key": st.column_config.Column("_key", width="small", help="id interno", disabled=True, visible=False),
-    }
+        # Fijamos columnas clave a la izquierda, nombres y anchos cómodos
+        gb.configure_column(METRIC_LABELS.get("Player","Player"), pinned="left", minWidth=230, wrapText=True, autoHeight=True)
+        gb.configure_column(METRIC_LABELS.get("Squad","Squad"), minWidth=160, wrapText=True, autoHeight=True)
+        gb.configure_column(METRIC_LABELS.get("Season","Season"), minWidth=110)
+        gb.configure_column(METRIC_LABELS.get("Rol_Tactico","Rol_Tactico"), minWidth=150, wrapText=True, autoHeight=True)
 
-    edited = st.data_editor(
-        tbl,
-        column_config=cfg,
-        use_container_width=True,
-        hide_index=True,
-        num_rows="fixed",
-        key="sh_editor",
-    )
+        # Columnas editables del flujo de scouting
+        gb.configure_column(METRIC_LABELS.get("Estado","Estado"),
+                            editable=True,
+                            cellEditor="agSelectCellEditor",
+                            cellEditorParams={"values":["Observado","Seguimiento","Candidato","No procede"]})
+        gb.configure_column(METRIC_LABELS.get("Prioridad","Prioridad"),
+                            editable=True,
+                            cellEditor="agSelectCellEditor",
+                            cellEditorParams={"values":["A","B","C"]})
+        gb.configure_column(METRIC_LABELS.get("Tags","Tags"), editable=True)
+        gb.configure_column(METRIC_LABELS.get("Notas","Notas"), editable=True)
+        gb.configure_column(METRIC_LABELS.get("Prox_accion","Prox_accion"), editable=True)
+        gb.configure_column(METRIC_LABELS.get("Estim_fee","Estim_fee"), editable=True)
+        gb.configure_column(METRIC_LABELS.get("Origen","Origen"), editable=True)
 
-    # 2) filas marcadas -> claves internas
-    selected_keys = edited.loc[edited["Sel"] == True, "_key"].tolist()
+        # Oculta _key (id interno)
+        gb.configure_column("_key", hide=True)
 
-    # 3) guardar ediciones (mapeo nombres bonitos -> reales)
-    back_map = {METRIC_LABELS.get(c, c): c for c in show_cols + ["_key"]}
-    edited_back = edited.rename(columns=back_map)
+        # Selección múltiple por clic/checkbox
+        gb.configure_selection(selection_mode="multiple", use_checkbox=True)
+        gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=25)
+        gb.configure_side_bar()
 
-    # solo actualizamos columnas del core (editables) y respetamos _key como índice
-    core_editables = ["Estado","Prioridad","Tags","Notas","Prox_accion","Estim_fee","Origen"]
-    if len(edited_back):
-        try:
-            new_core = edited_back[["_key"] + base_cols + core_editables].copy().set_index("_key")
-            base_keyed = table_df[["_key"] + base_cols + core_editables].copy().set_index("_key")
-            base_keyed.update(new_core)   # aplica cambios
-            # reconstruimos session_state.shortlist_df SOLO con core_cols (sin extras)
-            st.session_state.shortlist_df = base_keyed.reset_index(drop=True)[base_cols + core_editables]
-        except Exception:
-            # si algo falla, no rompas la app
-            pass
+        grid = AgGrid(
+            disp_df,
+            gridOptions=gb.build(),
+            theme="streamlit",
+            update_mode=GridUpdateMode.MODEL_CHANGED,  # recoge ediciones
+            columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
+            height=560,
+            allow_unsafe_jscode=True,
+            enable_enterprise_modules=False,
+        )
+
+        # 1) Ediciones -> guardamos en session_state.shortlist_df
+        edited_df = grid["data"].rename(columns=back_map)
+        # preserva solo core (las métricas extra son solo display)
+        edited_core = edited_df[core_cols + ["_key"]].copy()
+
+        # reconstruye el df base con las ediciones según _key
+        if len(edited_core):
+            base_by_key = short_df.copy()
+            if len(base_by_key):
+                base_by_key["_key"] = base_by_key[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
+                base_by_key = base_by_key.set_index("_key")
+                edited_core = edited_core.set_index("_key")
+                # aplica cambios únicamente a meta cols (y mantiene base_cols tal cual editados si cambiaste Notas, etc.)
+                cols_to_update = [c for c in core_cols if c in edited_core.columns]
+                base_by_key.loc[edited_core.index, cols_to_update] = edited_core[cols_to_update]
+                st.session_state.shortlist_df = base_by_key.reset_index(drop=True)[core_cols]
+            else:
+                # si antes estaba vacío y ahora hay filas (no debería suceder aquí), igual lo guardamos
+                st.session_state.shortlist_df = edited_core.reset_index(drop=True)[core_cols]
+
+        # 2) Seleccionados -> claves internas
+        sel_rows = grid["selected_rows"] or []
+        grid_sel_keys = [r["_key"] for r in sel_rows if "_key" in r]
 
 with right:
     st.markdown("### Acciones")
-    if selected_keys:
-        st.success(f"{len(selected_keys)} jugador(es) seleccionado(s)")
+    if grid_sel_keys:
+        st.success(f"{len(grid_sel_keys)} jugador(es) seleccionado(s)")
     else:
-        st.caption("Marca una o varias filas para activar las acciones.")
+        st.caption("Selecciona uno o varios jugadores en la tabla para eliminar.")
 
     # Eliminar seleccionados (1..n)
-    if st.button("🗑️ Eliminar seleccionado(s)", use_container_width=True, disabled=(len(selected_keys)==0)):
-        if len(selected_keys):
-            # construimos la misma clave en el df base para filtrar con seguridad
-            if len(st.session_state.shortlist_df):
-                base_keys = st.session_state.shortlist_df[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
-                keep_mask = ~base_keys.isin(set(selected_keys))
-                st.session_state.shortlist_df = st.session_state.shortlist_df.loc[keep_mask].reset_index(drop=True)
-            st.rerun()
+    if st.button("🗑️ Eliminar seleccionado(s)", use_container_width=True, disabled=(len(grid_sel_keys)==0)):
+        if len(st.session_state.shortlist_df):
+            cur_keys = st.session_state.shortlist_df[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
+            mask_keep = ~cur_keys.isin(set(grid_sel_keys))
+            st.session_state.shortlist_df = st.session_state.shortlist_df.loc[mask_keep].reset_index(drop=True)
+        st.rerun()
 
     # Descargar shortlist
     st.download_button(
@@ -1342,8 +1410,7 @@ with right:
         use_container_width=True
     )
 
-    # Vaciar (sin errores aunque quede vacío)
-    if st.button("🧹 Vaciar shortlist", type="secondary", use_container_width=True,
-                 help="Elimina todos los jugadores de la lista"):
+    # Vaciar shortlist (a prueba de errores)
+    if st.button("🧹 Vaciar shortlist", type="secondary", use_container_width=True):
         st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
         st.rerun()
