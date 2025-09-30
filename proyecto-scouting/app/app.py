@@ -777,68 +777,92 @@ with tab_ranking:
         st.rerun()
 
     # ---------- Tabla + Heatmap (verde→amarillo→rojo) ----------
-    try:
-        from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode, JsCode
+try:
+    from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode, JsCode
 
-        gb = GridOptionsBuilder.from_dataframe(tabla_disp)
-        gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
+    # === FIX CLAVE ÚNICA PARA LA TABLA (usa nombres ya renombrados) ===
+    disp_df = tabla_disp.copy()
+    # asegúrate de que no haya MultiIndex ni tipos raros en columnas
+    disp_df.columns = disp_df.columns.map(str)
 
-        # Si quieres usar la clave como rowId en AgGrid (opcional):
-        # gb.configure_grid_options(getRowId=JsCode("function(p){return p.data.__key;}"))
+    # nombres ya “bonitos” según tu METRIC_LABELS
+    col_player = label("Player")   # "Jugador"
+    col_squad  = label("Squad")    # "Equipo"
+    col_season = label("Season")   # "Temporada"
 
-        # primeras columnas legibles
-        gb.configure_column(label("Player"), pinned="left", minWidth=240, wrapText=True, autoHeight=True)
-        gb.configure_column(label("Squad"),  minWidth=160, wrapText=True, autoHeight=True)
-        gb.configure_column(label("Season"), minWidth=110)
-        gb.configure_column(label("Rol_Tactico"), header_name=label("Rol_Tactico"), minWidth=150, wrapText=True, autoHeight=True)
-        if "Edad (U22/U28)" in tabla_disp.columns:
-            gb.configure_column("Edad (U22/U28)", minWidth=90)
+    # si alguna falta (por algún preset), la creamos vacía para no romper
+    for c in [col_player, col_squad, col_season]:
+        if c not in disp_df.columns:
+            disp_df[c] = ""
 
-        # Heatmap en percentiles / índice ponderado
-        heat_cols = [c for c in tabla_disp.columns if c.startswith("Pct (")]
-        if "Índice ponderado" in tabla_disp.columns:
-            heat_cols.append("Índice ponderado")
+    # si ya existiera __key previa, la quitamos para evitar conflictos de tipo
+    if "__key" in disp_df.columns:
+        disp_df.drop(columns=["__key"], inplace=True, errors="ignore")
 
-        heat_js = JsCode("""
-            function(params) {
-                var v = Number(params.value);
-                if (isNaN(v)) { return {}; }
-                var p = Math.max(0, Math.min(100, v));
-                var hue = p * 1.2; 
-                return {'backgroundColor': 'hsl(' + hue + ', 70%, 32%)', 'color': 'white'};
-            }
-        """)
-        for c in heat_cols:
-            gb.configure_column(c, cellStyle=heat_js)
+    # construimos una clave 1D (Series) válida para cada fila
+    disp_df["__key"] = (
+        disp_df[[col_player, col_squad, col_season]]
+        .astype(str)
+        .agg("|".join, axis=1)
+    )
 
-        zebra_js = JsCode("""
-            function(params) {
-              if (params.node && params.node.rowIndex % 2 === 0) {
-                return {'backgroundColor': 'rgba(255,255,255,0.03)'};
-              }
-              return {};
-            }
-        """)
-        gb.configure_grid_options(getRowStyle=zebra_js, enableBrowserTooltips=True, rowHeight=36)
+    # A PARTIR DE AQUÍ usamos disp_df en vez de tabla_disp
+    gb = GridOptionsBuilder.from_dataframe(disp_df)
+    gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
 
-        gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=25)
-        gb.configure_side_bar()
-        grid_options = gb.build()
+    # primeras columnas legibles (usa los nombres ya renombrados)
+    gb.configure_column(col_player, pinned="left", minWidth=240, wrapText=True, autoHeight=True)
+    gb.configure_column(col_squad,  minWidth=160, wrapText=True, autoHeight=True)
+    gb.configure_column(col_season, minWidth=110)
+    gb.configure_column(label("Rol_Tactico"), header_name=label("Rol_Tactico"), minWidth=150, wrapText=True, autoHeight=True)
+    if "Edad (U22/U28)" in disp_df.columns:
+        gb.configure_column("Edad (U22/U28)", minWidth=90)
 
-        AgGrid(
-            tabla_disp,
-            gridOptions=grid_options,
-            theme="streamlit",
-            update_mode=GridUpdateMode.NO_UPDATE,
-            columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
-            fit_columns_on_grid_load=False,
-            height=580,
-            allow_unsafe_jscode=True,
-        )
-    except Exception:
-        st.dataframe(tabla_disp, use_container_width=True, hide_index=True)
+    # Heatmap en percentiles / índice ponderado
+    heat_cols = [c for c in disp_df.columns if c.startswith("Pct (")]
+    if "Índice ponderado" in disp_df.columns:
+        heat_cols.append("Índice ponderado")
 
-    st.markdown('</div>', unsafe_allow_html=True) 
+    heat_js = JsCode("""
+        function(params) {
+            var v = Number(params.value);
+            if (isNaN(v)) { return {}; }
+            var p = Math.max(0, Math.min(100, v)); // clamp 0..100
+            var hue = p * 1.2; // 0->rojo, 50->amarillo, 100->verde
+            return {'backgroundColor': 'hsl(' + hue + ', 70%, 32%)', 'color': 'white'};
+        }
+    """)
+    for c in heat_cols:
+        gb.configure_column(c, cellStyle=heat_js)
+
+    zebra_js = JsCode("""
+        function(params) {
+          if (params.node && params.node.rowIndex % 2 === 0) {
+            return {'backgroundColor': 'rgba(255,255,255,0.03)'};
+          }
+          return {};
+        }
+    """)
+    gb.configure_grid_options(getRowStyle=zebra_js, enableBrowserTooltips=True, rowHeight=36)
+
+    gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=25)
+    gb.configure_side_bar()
+    grid_options = gb.build()
+
+    AgGrid(
+        disp_df,  // <<----- aquí también usamos disp_df
+        gridOptions=grid_options,
+        theme="streamlit",
+        update_mode=GridUpdateMode.NO_UPDATE,
+        columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
+        fit_columns_on_grid_load=False,
+        height=580,
+        allow_unsafe_jscode=True,
+    )
+except Exception:
+    # fallback simple
+    st.dataframe(disp_df if 'disp_df' in locals() else tabla_disp,
+                 use_container_width=True, hide_index=True)
         
 # ===================== COMPARADOR (Radar) ===========================
 with tab_compare:
@@ -1520,4 +1544,5 @@ with right:
         st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
         st.session_state.shortlist_sel_ids = []
         st.rerun()
+
 
