@@ -1,11 +1,12 @@
-[theme]
-primaryColor = "#1f77b4"
-backgroundColor = "#0E1117"
-secondaryBackgroundColor = "#1B1F24"
-textColor = "#FAFAFA"
+import pandas as pd
+import numpy as np
+import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
+from pathlib import Path
 
-[server]
-fileWatcherType = "none"   # <- desactiva el watcher que abre muchos ficheros
-# Opcional:
-# runOnSave = false         # evita relanzar la app al guardar (si editas en servidor)
-# maxUploadSize = 200       # si quisieras subir CSVs grandes en Shortlist
+# Debe ser la PRIMERA llamada de Streamlit
+st.set_page_config(page_title="Scouting LaLiga", layout="wide")
+
+# (opcional si ya está en config.toml; no molesta si queda duplicado)
+st.set_option("server.fileWatcherType", "none")
