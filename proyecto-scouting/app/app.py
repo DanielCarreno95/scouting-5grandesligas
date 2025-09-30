@@ -1107,7 +1107,7 @@ with tab_similarity:
 with tab_shortlist:
     st.subheader("Shortlist (lista de seguimiento)")
 
-    # --------- setup ---------
+    # ---------- columnas base ----------
     base_cols = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]
     meta_cols = ["Estado","Prioridad","Tags","Notas","Prox_accion","Estim_fee","Origen"]
     core_cols = base_cols + meta_cols
@@ -1115,37 +1115,33 @@ with tab_shortlist:
     if "shortlist_df" not in st.session_state:
         st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
 
-    # ======== util: métrica por fila (match exacto o media jugador) ========
     def attach_metric_columns(shdf_in: pd.DataFrame, metrics_to_add: list) -> pd.DataFrame:
-        if not metrics_to_add:
+        """Trae métricas de dff_view (match Player+Squad+Season; fallback media por jugador)."""
+        if not metrics_to_add or shdf_in.empty:
             return shdf_in.copy()
         sh = shdf_in.copy()
-        uni = dff_view.copy()  # universo actual
-        # medias por jugador (para completar lagunas de Season/Squad)
+        uni = dff_view.copy()
+
         by_player_mean = (
             uni.groupby("Player")[metrics_to_add]
-            .mean(numeric_only=True)
-            .reset_index()
+               .mean(numeric_only=True)
+               .reset_index()
         )
-        # match exacto Player+Squad+Season
         match_cols = ["Player","Squad","Season"]
-        right_cols = match_cols + [m for m in metrics_to_add if m in uni.columns]
-        mrg = pd.merge(sh, uni[right_cols], on=match_cols, how="left", suffixes=("","__exact"))
-        # completa vacíos con media por jugador
-        mrg = pd.merge(mrg, by_player_mean, on="Player", how="left", suffixes=("","__ply"))
+
+        mrg = sh.merge(uni[match_cols + metrics_to_add], on=match_cols, how="left")
+        mrg = mrg.merge(by_player_mean, on="Player", how="left", suffixes=("", "__ply"))
         for m in metrics_to_add:
-            col_exact = m  # ya viene del merge exacto
-            col_ply   = f"{m}__ply"
-            if col_exact in mrg.columns and col_ply in mrg.columns:
-                mrg[col_exact] = mrg[col_exact].fillna(mrg[col_ply])
-                mrg.drop(columns=[col_ply], inplace=True)
+            if m in mrg and f"{m}__ply" in mrg:
+                mrg[m] = mrg[m].fillna(mrg[f"{m}__ply"])
+                mrg.drop(columns=[f"{m}__ply"], inplace=True)
         return mrg
 
-    # ======== estilos compactos ========
+    # ---------- estilos compactos ----------
     st.markdown("""
     <style>
-      .sh-compact label, .sh-compact div[role="radiogroup"], .sh-compact .stTextInput, 
-      .sh-compact .stMultiSelect, .sh-compact .stTextArea, .sh-compact .stDateInput {margin-bottom:.25rem}
+      .sh-compact label, .sh-compact .stTextInput, .sh-compact .stMultiSelect,
+      .sh-compact .stDateInput, .sh-compact .stSelectbox { margin-bottom: .3rem; }
       .sh-hr{opacity:.12;margin:.35rem 0}
     </style>
     """, unsafe_allow_html=True)
@@ -1153,69 +1149,63 @@ with tab_shortlist:
     # ===================== KPIs =====================
     shdf = st.session_state.shortlist_df.copy()
 
-    def _c(est): 
-        return int((shdf["Estado"]==est).sum()) if len(shdf) and "Estado" in shdf.columns else 0
-
-    k1,k2,k3,k4,k5,k6 = st.columns(6)
-    k1.metric("Jugadores en Shortlist", f"{len(shdf):,}")
+    def _c(est): return int((shdf["Estado"]==est).sum()) if not shdf.empty else 0
+    k1,k2,k3,k4,k5 = st.columns(5)
+    k1.metric("Jugadores en shortlist", f"{len(shdf):,}")
     k2.metric("Observados",  f"{_c('Observado'):,}")
     k3.metric("Seguimiento", f"{_c('Seguimiento'):,}")
     k4.metric("Candidatos",  f"{_c('Candidato'):,}")
     k5.metric("No procede",  f"{_c('No procede'):,}")
-    try:
-        k6.metric("Edad media", f"{pd.to_numeric(shdf['Age'], errors='coerce').mean():.1f}" if len(shdf) else "—")
-    except Exception:
-        k6.metric("Edad media", "—")
+    k_age = pd.to_numeric(shdf["Age"], errors="coerce").mean() if not shdf.empty else None
+    st.metric("Edad media", f"{k_age:.1f}" if k_age==k_age else "—")  # NaN-safe
 
     st.markdown("<hr class='sh-hr'>", unsafe_allow_html=True)
 
-    # ===================== ALTA RÁPIDA (jugador + metadatos) =====================
-    st.markdown("**➕ Alta rápida** · añade al jugador y deja marcada **situación**, **prioridad** y **próxima acción** como lo trabajaría la secretaría técnica.")
+    # ===================== Alta rápida (Jugador + ficha) =====================
+    st.markdown("**➕ Alta rápida** · añade al jugador y deja marcada **situación, prioridad y próxima acción** como lo trabaja la secretaría técnica.")
 
     with st.container():
-        c1,c2 = st.columns([0.62,0.38])
-        with c1:
-            add_sel = st.multiselect(
-                "Jugador(es) del universo actual",
-                options=sorted(dff_view["Player"].dropna().unique().tolist()),
-                placeholder="Escribe para buscar…",
-                key="sh_add_sel",
+        # Jugador (buscador)
+        c0,cbtn = st.columns([0.8,0.2])
+        with c0:
+            add_player = st.selectbox(
+                "Jugador", 
+                options=[""] + sorted(dff_view["Player"].dropna().unique().tolist()),
+                index=0, 
+                placeholder="Escribe para buscar…"
             )
-        with c2:
+        with cbtn:
             st.write("")
             add_btn = st.button("➕ Agregar a shortlist", use_container_width=True)
 
-        with st.container():
-            f1,f2,f3,f4,f5 = st.columns([0.15,0.12,0.22,0.21,0.15], gap="small")
-            with f1:
-                # Estado: SIN "Informe"
-                add_estado = st.selectbox("Situación", ["Observado","Seguimiento","Candidato","No procede"], index=0, key="sh_add_estado")
-            with f2:
-                add_prior = st.selectbox("Prioridad", ["A","B","C"], index=1, key="sh_add_prior")
-            with f3:
-                add_tags = st.text_input("Tags (coma)", key="sh_add_tags", placeholder="U23, zurdo, HG…")
-            with f4:
-                add_notas = st.text_input("Notas", key="sh_add_notas", placeholder="contexto, rol, status interno…")
-            with f5:
-                add_fee = st.text_input("Fee estimado (€)", key="sh_add_fee", placeholder="ej. 12-15M")
+        # Ficha (situación/prioridad/acción)
+        f1,f2,f3,f4 = st.columns([0.15,0.1,0.45,0.30])
+        with f1:
+            add_estado = st.selectbox("Situación", ["Observado","Seguimiento","Candidato","No procede"], index=0)
+        with f2:
+            add_prior = st.selectbox("Prioridad", ["A","B","C"], index=1)
+        with f3:
+            add_tags  = st.text_input("Tags (coma)", placeholder="U23, zurdo, HG…")
+        with f4:
+            add_notas = st.text_input("Notas", placeholder="contexto, rol, status interno…")
 
-            g1,g2 = st.columns([0.18,0.82])
-            with g1:
-                add_date = st.date_input("Próx. acción", value=None, format="YYYY-MM-DD", key="sh_add_date")
-            with g2:
-                st.caption("Define la siguiente acción: vídeo, live, llamada, informe interno, etc.")
+        g1,g2 = st.columns([0.18,0.82])
+        with g1:
+            add_date = st.date_input("Próx. acción", value=None, format="YYYY-MM-DD")
+        with g2:
+            add_fee  = st.text_input("Fee estimado (€)", placeholder="ej. 12-15M")
 
-        st.markdown("<hr class='sh-hr'>", unsafe_allow_html=True)
-
+        # Acción de alta
         if add_btn:
-            if not add_sel:
-                st.warning("Selecciona al menos un jugador.")
+            if not add_player:
+                st.warning("Selecciona un jugador.")
             else:
-                take = dff_view[dff_view["Player"].isin(add_sel)][base_cols].drop_duplicates(
-                    subset=["Player","Squad","Season"]
-                ).copy()
+                # Tomamos su última fila del universo como tarjeta base
+                take = (dff_view[dff_view["Player"]==add_player]
+                        .sort_values(["Season","Min"], ascending=[False,False])
+                        [base_cols].head(1).copy())
                 if take.empty:
-                    st.info("No encontré filas en el universo actual para esos jugadores.")
+                    st.info("Ese jugador no aparece en el universo actual.")
                 else:
                     take["Estado"]      = add_estado
                     take["Prioridad"]   = add_prior
@@ -1225,139 +1215,129 @@ with tab_shortlist:
                     take["Estim_fee"]   = add_fee
                     take["Origen"]      = "App"
 
+                    # Evita duplicados por Player+Squad+Season
+                    key_cols = ["Player","Squad","Season"]
                     if not st.session_state.shortlist_df.empty:
-                        k_old = st.session_state.shortlist_df[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
-                        k_new = take[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
-                        take = take[~k_new.isin(set(k_old))]
+                        existing = st.session_state.shortlist_df[key_cols].astype(str).agg("|".join, axis=1)
+                        newk     = take[key_cols].astype(str).agg("|".join, axis=1)
+                        take     = take[~newk.isin(set(existing))]
                     if len(take):
-                        st.session_state.shortlist_df = pd.concat([st.session_state.shortlist_df, take], ignore_index=True)
-                        st.success(f"Añadidos {len(take)} jugador(es) a la shortlist.")
+                        st.session_state.shortlist_df = pd.concat(
+                            [st.session_state.shortlist_df, take], ignore_index=True
+                        )
+                        st.success(f"{add_player} añadido a la shortlist.")
                         st.rerun()
                     else:
-                        st.info("Todos los seleccionados ya estaban en la shortlist.")
+                        st.info("Ese registro ya estaba en la shortlist.")
 
-    # ===================== Columnas extra de métricas para la tabla =====================
-    st.markdown("**Columnas de rendimiento** · añade las métricas que quieras tener a la vista en la tabla.")
+    st.markdown("<hr class='sh-hr'>", unsafe_allow_html=True)
+
+    # ===================== Columnas de rendimiento (añadir a la vista) =====================
     all_metric_candidates = [c for c in dff_view.columns if (c.endswith("_per90") or c in ["Cmp%","Save%"])]
     extra_metrics = st.multiselect(
-        "Añadir columnas (por 90’/porcentaje)",
+        "Añadir columnas (por 90/porcentaje)",
         options=sorted(all_metric_candidates),
         default=[],
         format_func=lambda c: METRIC_LABELS.get(c,c),
         key="sh_extra_metrics"
     )
 
-    # Construimos DF de tabla + métricas extra
     table_df = attach_metric_columns(st.session_state.shortlist_df, extra_metrics)
     show_cols = core_cols + extra_metrics
-    disp_df = round_numeric_for_display(table_df[show_cols], ndigits=3)
 
-    # Clave oculta para selección inequívoca (evita problemas al renombrar)
-    disp_df["__key"] = disp_df[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
+    disp_df = round_numeric_for_display(table_df[show_cols] if not table_df.empty else table_df, ndigits=3)
+    disp_df_ren = rename_for_display(disp_df, show_cols) if not disp_df.empty else disp_df
 
-    # Renombrado a nombres “bonitos”
-    disp_df_ren = rename_for_display(disp_df, show_cols + ["__key"])
+    # ===================== Tabla + Acciones (derecha) =====================
+    left, right = st.columns([0.77, 0.23], gap="large")
 
-   # ===================== 4) Tabla + Acciones a la derecha (sin AgGrid) =====================
-left, right = st.columns([0.77, 0.23], gap="large")
+    # ---- Tabla
+    with left:
+        selected_key = None
+        if disp_df_ren.empty:
+            st.info("Tu shortlist está vacía. Añade jugadores arriba.")
+        else:
+            try:
+                from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode, JsCode
+                gb = GridOptionsBuilder.from_dataframe(disp_df_ren)
+                gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
 
-with left:
-    # 1) Preparamos la tabla “bonita” + columna de selección
-    tbl = disp_df_ren.copy().reset_index(drop=True)
+                # columnas editables (estado/pri/tags/notas/acción/fee)
+                gb.configure_column(METRIC_LABELS.get("Estado","Estado"),
+                                    editable=True, cellEditor="agSelectCellEditor",
+                                    cellEditorParams={"values":["Observado","Seguimiento","Candidato","No procede"]}, minWidth=130)
+                gb.configure_column(METRIC_LABELS.get("Prioridad","Prioridad"),
+                                    editable=True, cellEditor="agSelectCellEditor",
+                                    cellEditorParams={"values":["A","B","C"]}, minWidth=90)
+                gb.configure_column(METRIC_LABELS.get("Tags","Tags"),  editable=True, minWidth=160)
+                gb.configure_column(METRIC_LABELS.get("Notas","Notas"), editable=True, minWidth=220)
+                gb.configure_column(METRIC_LABELS.get("Prox_accion","Próx. acción (YYYY-MM-DD)"), editable=True, minWidth=160)
+                gb.configure_column(METRIC_LABELS.get("Estim_fee","Estim. fee (€)"), editable=True, minWidth=120)
 
-    # recordamos la fila seleccionada entre reruns
-    if "sh_sel_row" not in st.session_state:
-        st.session_state.sh_sel_row = -1
+                # selección
+                gb.configure_selection("single", use_checkbox=True)
 
-    # columna de selección (checkbox)
-    if "Sel" not in tbl.columns:
-        tbl.insert(0, "Sel", False)
-    if 0 <= st.session_state.sh_sel_row < len(tbl):
-        tbl.loc[st.session_state.sh_sel_row, "Sel"] = True
+                grid = AgGrid(
+                    disp_df_ren,
+                    gridOptions=gb.build(),
+                    theme="streamlit",
+                    update_mode=GridUpdateMode.VALUE_CHANGED | GridUpdateMode.SELECTION_CHANGED,
+                    columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
+                    height=420
+                )
 
-    # 2) Configuración de columnas (selects, fecha, etc.)
-    cfg = {
-        "Sel": st.column_config.CheckboxColumn(
-            "Sel", help="Marca una fila para activar acciones", width="small"
-        ),
-        "Estado": st.column_config.SelectboxColumn(
-            "Estado", options=["Observado","Seguimiento","Candidato","No procede"]
-        ),
-        "Prioridad": st.column_config.SelectboxColumn(
-            "Prioridad", options=["A","B","C"]
-        ),
-        "Próx. acción (YYYY-MM-DD)": st.column_config.DateColumn(format="YYYY-MM-DD"),
-        "Estim. fee (€)": st.column_config.TextColumn(),
-    }
+                # mapear nombres bonitos -> core para guardar cambios
+                back_map = {METRIC_LABELS.get(c,c): c for c in show_cols}
+                updated_core = pd.DataFrame(grid["data"]).rename(columns=back_map)
 
-    # 3) Editor (estable, sin JS externo)
-    edited = st.data_editor(
-        tbl,
-        column_config=cfg,
-        use_container_width=True,
-        hide_index=True,
-        num_rows="fixed",
-        key="sh_editor",
-    )
+                # merge por clave
+                key_cols = ["Player","Squad","Season"]
+                if not updated_core.empty:
+                    base = st.session_state.shortlist_df.set_index(key_cols)
+                    upd  = updated_core.set_index(key_cols)
+                    inter = list(set(core_cols) & set(upd.columns))
+                    base.loc[upd.index, inter] = upd[inter]
+                    st.session_state.shortlist_df = base.reset_index()
 
-    # 4) ¿Qué fila quedó marcada?
-    sel_rows = edited.index[edited["Sel"] == True].tolist()
-    sel_idx = sel_rows[0] if sel_rows else -1
-    st.session_state.sh_sel_row = sel_idx
+                # selección (para habilitar eliminar)
+                if grid.get("selected_rows"):
+                    sr = pd.DataFrame(grid["selected_rows"]).rename(columns=back_map)
+                    selected_key = tuple(sr.loc[0, ["Player","Squad","Season"]].tolist())
+            except Exception:
+                # fallback
+                st.dataframe(disp_df_ren, use_container_width=True, height=420)
 
-    # 5) Mapeo “nombres bonitos” -> reales para clave y guardado
-    selected_key = None
-    back_map = {METRIC_LABELS.get(c, c): c for c in show_cols}
+    # ---- Acciones
+    with right:
+        st.markdown("### Acciones")
+        st.caption("Selecciona una fila de la tabla para activar acciones.")
 
-    if sel_idx != -1:
-        row_core = edited.drop(columns=["Sel"]).rename(columns=back_map).iloc[sel_idx]
-        try:
-            selected_key = tuple(row_core[["Player","Squad","Season"]].tolist())
-        except Exception:
-            selected_key = None
+        # Eliminar seleccionado
+        disabled_del = (selected_key is None)
+        if st.button("🗑️ Eliminar seleccionado", use_container_width=True, disabled=disabled_del):
+            if selected_key:
+                mask = ~(
+                    (st.session_state.shortlist_df["Player"]==selected_key[0]) &
+                    (st.session_state.shortlist_df["Squad"]==selected_key[1]) &
+                    (st.session_state.shortlist_df["Season"]==selected_key[2])
+                )
+                st.session_state.shortlist_df = st.session_state.shortlist_df[mask].copy()
+                st.success("Jugador eliminado de la shortlist.")
+                st.rerun()
 
-    # 6) Guardamos ediciones en el df base (solo columnas core editables)
-    edited_core = edited.drop(columns=["Sel"]).rename(columns=back_map)
+        # Descargar shortlist
+        st.download_button(
+            "⬇️ Descargar shortlist (CSV)",
+            data=st.session_state.shortlist_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="shortlist_scouting.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
 
-    key_cols = ["Player","Squad","Season"]
-    sh_base = st.session_state.shortlist_df.copy().set_index(key_cols)
-    upd_core = edited_core.set_index(key_cols)
-
-    common_cols = list(set(core_cols) & set(upd_core.columns))
-    if common_cols:
-        sh_base.loc[upd_core.index, common_cols] = upd_core[common_cols]
-        st.session_state.shortlist_df = sh_base.reset_index()
-
-with right:
-    st.markdown("### Acciones")
-    if selected_key is not None:
-        st.success(f"Seleccionado: {selected_key[0]} — {selected_key[1]} — {selected_key[2]}")
-    else:
-        st.caption("Marca una fila para activar las acciones sobre ese jugador.")
-
-    # Eliminar seleccionado
-    disabled_del = (selected_key is None)
-    if st.button("🗑️ Eliminar seleccionado", use_container_width=True, disabled=disabled_del):
-        if selected_key:
-            mask = ~(
-                (st.session_state.shortlist_df["Player"]==selected_key[0]) &
-                (st.session_state.shortlist_df["Squad"]==selected_key[1]) &
-                (st.session_state.shortlist_df["Season"]==selected_key[2])
-            )
-            st.session_state.shortlist_df = st.session_state.shortlist_df[mask].copy()
+        # Vaciar shortlist
+        if st.button("🧹 Vaciar shortlist", type="secondary", use_container_width=True, help="Borra todos los registros de la shortlist"):
+            st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
             st.rerun()
 
-    # Descargar shortlist
-    st.download_button(
-        "⬇️ Descargar shortlist (CSV)",
-        data=st.session_state.shortlist_df.to_csv(index=False).encode("utf-8-sig"),
-        file_name="shortlist_scouting.csv",
-        mime="text/csv",
-        use_container_width=True
-    )
-
-    # Vaciar
-    if st.button("🧹 Vaciar shortlist", type="secondary", use_container_width=True):
-        st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
-        st.rerun()
-
+    st.markdown("<hr class='sh-hr'>", unsafe_allow_html=True)
+    st.caption("**Tip:** usa *Tags* para agrupar (p. ej. `U23, zurdo, HG`) y *Próx. acción* para coordinar el trabajo (vídeo, live, llamada, etc.).")
