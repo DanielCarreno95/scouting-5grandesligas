@@ -1033,18 +1033,23 @@ with tab_compare:
     )
     c.dataframe(df_cmp, use_container_width=True, hide_index=True)
 
-    # Export PNG del radar (opcional)
+    # Export PNG del radar (opcional, bajo demanda para no abrir recursos en cada rerun)
+gen = c.button("🖼️ Generar PNG del radar", key="cmp_png_btn")
+if gen:
     try:
-        png_bytes = fig.to_image(format="png", scale=2)
-        c.download_button("🖼️ Descargar radar (PNG)", data=png_bytes,
-                          file_name=f"radar_{'_vs_'.join(sel_players)}.png",
-                          mime="image/png", key="cmp_png_dl")
-    except Exception:
-        c.caption('Para exportar PNG instala <code>kaleido</code> en <code>requirements.txt</code>.',
-                  unsafe_allow_html=True)
+        st.session_state["radar_png"] = fig.to_image(format="png", scale=2)
+        c.success("PNG generado. Ahora puedes descargarlo.")
+    except Exception as e:
+        c.error(f"No se pudo generar el PNG. ¿Tienes 'kaleido' instalado? Detalle: {e}")
 
-    c.markdown('</div>', unsafe_allow_html=True)
-
+if "radar_png" in st.session_state:
+    c.download_button(
+        "⬇️ Descargar radar (PNG)",
+        data=st.session_state["radar_png"],
+        file_name=f"radar_{'_vs_'.join(sel_players)}.png",
+        mime="image/png",
+        key="cmp_png_dl"
+    )
 
 # ===================== SIMILARES =====================
 with tab_similarity:
@@ -1515,3 +1520,4 @@ with right:
         st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
         st.session_state.shortlist_sel_ids = []
         st.rerun()
+
