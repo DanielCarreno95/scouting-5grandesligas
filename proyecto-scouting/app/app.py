@@ -1,10 +1,15 @@
-# app/app.py
 import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
+
+# Debe ser la PRIMERA llamada de Streamlit
+st.set_page_config(page_title="Scouting LaLiga", layout="wide")
+
+# (opcional si ya está en config.toml; no molesta si queda duplicado)
+st.set_option("server.fileWatcherType", "none")
 
 # ===================== Config / Head =====================
 st.set_page_config(page_title="Scouting LaLiga", layout="wide")
@@ -1544,5 +1549,6 @@ with right:
         st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
         st.session_state.shortlist_sel_ids = []
         st.rerun()
+
 
 
