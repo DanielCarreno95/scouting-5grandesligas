@@ -1238,170 +1238,131 @@ extra_metrics = st.multiselect(
     options=sorted(all_metric_candidates),
     default=[],
     format_func=lambda c: METRIC_LABELS.get(c, c),
-    key="sh_extra_metrics",
+    key="sh_extra_metrics"
 )
 
-# Universo de shortlist (core)
+# Asegura que el df base exista con las columnas core
 base_cols = ["Player","Squad","Season","Rol_Tactico","Comp","Min","Age"]
 meta_cols = ["Estado","Prioridad","Tags","Notas","Prox_accion","Estim_fee","Origen"]
 core_cols = base_cols + meta_cols
+if "shortlist_df" not in st.session_state:
+    st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
 
-# DF base que se edita
-short_df = st.session_state.shortlist_df.copy()
-
-# Asegura columnas aunque esté vacío
-for c in core_cols:
-    if c not in short_df.columns:
-        short_df[c] = []
-
-# Clave estable por fila
-if len(short_df):
-    short_df["_key"] = short_df[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
-else:
-    short_df["_key"] = pd.Series(dtype=str)
-
-# Añade métricas del universo activo (solo para pintar)
+# --- métricas del universo (solo para visualizar) ---
 def attach_metric_columns(shdf_in: pd.DataFrame, metrics_to_add: list) -> pd.DataFrame:
-    if not metrics_to_add:
-        return shdf_in.copy()
-    sh = shdf_in.copy()
-    if sh.empty:
-        # devuelve estructura vacía con columnas pedidas
-        for m in metrics_to_add:
-            sh[m] = np.nan
-        return sh
+    if not metrics_to_add or shdf_in.empty:
+        out = shdf_in.copy()
+        for m in (metrics_to_add or []):
+            if m not in out.columns:
+                out[m] = np.nan
+        return out
 
     uni = dff_view.copy()
     match_cols = ["Player","Squad","Season"]
     right_cols = [c for c in match_cols + metrics_to_add if c in uni.columns]
 
-    # merge directo con coincidencia exacta de temporada/equipo
-    out = pd.merge(sh, uni[right_cols], on=match_cols, how="left")
+    out = pd.merge(shdf_in, uni[right_cols], on=match_cols, how="left")
 
-    # completa con media por jugador si faltan métricas exactas
-    if metrics_to_add:
-        by_player = (
-            uni.groupby("Player")[metrics_to_add].mean(numeric_only=True).reset_index()
-        )
-        out = pd.merge(out, by_player, on="Player", how="left", suffixes=("", "__ply"))
-        for m in metrics_to_add:
-            if m in out.columns and f"{m}__ply" in out.columns:
-                out[m] = pd.to_numeric(out[m], errors="coerce").fillna(
-                    pd.to_numeric(out[f"{m}__ply"], errors="coerce")
-                )
-                out.drop(columns=[f"{m}__ply"], inplace=True)
-
+    # media por jugador para completar
+    by_pl = uni.groupby("Player")[metrics_to_add].mean(numeric_only=True).reset_index()
+    out = pd.merge(out, by_pl, on="Player", how="left", suffixes=("", "__ply"))
+    for m in metrics_to_add:
+        if m in out.columns and f"{m}__ply" in out.columns:
+            out[m] = pd.to_numeric(out[m], errors="coerce").fillna(pd.to_numeric(out[f"{m}__ply"], errors="coerce"))
+            out.drop(columns=[f"{m}__ply"], inplace=True)
     return out
 
-table_df = attach_metric_columns(short_df, extra_metrics).copy()
+table_df = attach_metric_columns(st.session_state.shortlist_df, extra_metrics).copy()
 
-# Asegura todas las columnas visibles
-show_cols = core_cols + extra_metrics + ["_key"]
-for c in show_cols:
-    if c not in table_df.columns:
-        table_df[c] = np.nan
-
-# Versión “bonita” para labels
-disp_df = round_numeric_for_display(table_df[show_cols], ndigits=3)
-disp_df = disp_df.rename(columns={c: METRIC_LABELS.get(c, c) for c in disp_df.columns})
-
-# Mapeo inverso (bonito -> real)
-back_map = {METRIC_LABELS.get(c, c): c for c in show_cols}
-
-# ===================== 4) Tabla (AgGrid) + Acciones =====================
+# ===================== 4) Tabla + Acciones (sin AgGrid) =====================
 left, right = st.columns([0.77, 0.23], gap="large")
 
 with left:
-    if len(disp_df) == 0:
-        st.info("Tu shortlist está vacía. Añade jugadores arriba y aquí podrás gestionarlos.")
-        grid_sel_keys = []
+    # Prepara df para el editor:
+    # - mantenemos los nombres de columnas "técnicos" INTERNOS (para poder borrar por Player/Squad/Season)
+    # - usamos column_config para mostrar etiquetas "de scouting"
+    show_cols = core_cols + extra_metrics
+
+    # inserta/asegura columna de selección
+    tbl = table_df[show_cols].copy()
+    if "Sel" not in tbl.columns:
+        tbl.insert(0, "Sel", False)
     else:
-        from st_aggrid import AgGrid, GridOptionsBuilder, ColumnsAutoSizeMode, GridUpdateMode, JsCode
+        # Si ya existía, nos aseguramos de que sea booleana
+        tbl["Sel"] = tbl["Sel"].astype(bool).fillna(False)
 
-        # Construcción de AgGrid
-        gb = GridOptionsBuilder.from_dataframe(disp_df)
-        gb.configure_default_column(sortable=True, filter=True, resizable=True, floatingFilter=True)
+    # Config columnas con etiquetas
+    cfg = {
+        "Sel": st.column_config.CheckboxColumn("Sel", help="Marca la fila para eliminarla", width="small"),
+        "Player":      st.column_config.TextColumn(METRIC_LABELS["Player"], disabled=True),
+        "Squad":       st.column_config.TextColumn(METRIC_LABELS["Squad"], disabled=True),
+        "Season":      st.column_config.TextColumn(METRIC_LABELS["Season"], disabled=True),
+        "Rol_Tactico": st.column_config.TextColumn(METRIC_LABELS["Rol_Tactico"], disabled=True),
+        "Comp":        st.column_config.TextColumn(METRIC_LABELS["Comp"], disabled=True),
+        "Min":         st.column_config.NumberColumn(METRIC_LABELS["Min"], disabled=True),
+        "Age":         st.column_config.NumberColumn(METRIC_LABELS["Age"], disabled=True),
 
-        # Fijamos columnas clave a la izquierda, nombres y anchos cómodos
-        gb.configure_column(METRIC_LABELS.get("Player","Player"), pinned="left", minWidth=230, wrapText=True, autoHeight=True)
-        gb.configure_column(METRIC_LABELS.get("Squad","Squad"), minWidth=160, wrapText=True, autoHeight=True)
-        gb.configure_column(METRIC_LABELS.get("Season","Season"), minWidth=110)
-        gb.configure_column(METRIC_LABELS.get("Rol_Tactico","Rol_Tactico"), minWidth=150, wrapText=True, autoHeight=True)
+        # Campos del flujo de scouting (editables)
+        "Estado":      st.column_config.SelectboxColumn("Estado", options=["Observado","Seguimiento","Candidato","No procede"]),
+        "Prioridad":   st.column_config.SelectboxColumn("Prioridad", options=["A","B","C"]),
+        "Tags":        st.column_config.TextColumn("Tags (coma)"),
+        "Notas":       st.column_config.TextColumn("Notas (contexto/rol/status)"),
+        "Prox_accion": st.column_config.TextColumn("Próx. acción (YYYY-MM-DD)"),
+        "Estim_fee":   st.column_config.TextColumn("Estim. fee (€)"),
+        "Origen":      st.column_config.TextColumn("Origen"),
+    }
+    # Añade config de métricas con etiqueta
+    for m in extra_metrics:
+        cfg[m] = st.column_config.NumberColumn(METRIC_LABELS.get(m, m), disabled=True)
 
-        # Columnas editables del flujo de scouting
-        gb.configure_column(METRIC_LABELS.get("Estado","Estado"),
-                            editable=True,
-                            cellEditor="agSelectCellEditor",
-                            cellEditorParams={"values":["Observado","Seguimiento","Candidato","No procede"]})
-        gb.configure_column(METRIC_LABELS.get("Prioridad","Prioridad"),
-                            editable=True,
-                            cellEditor="agSelectCellEditor",
-                            cellEditorParams={"values":["A","B","C"]})
-        gb.configure_column(METRIC_LABELS.get("Tags","Tags"), editable=True)
-        gb.configure_column(METRIC_LABELS.get("Notas","Notas"), editable=True)
-        gb.configure_column(METRIC_LABELS.get("Prox_accion","Prox_accion"), editable=True)
-        gb.configure_column(METRIC_LABELS.get("Estim_fee","Estim_fee"), editable=True)
-        gb.configure_column(METRIC_LABELS.get("Origen","Origen"), editable=True)
+    # Editor
+    edited = st.data_editor(
+        tbl,
+        column_config=cfg,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        key="sh_editor_v2",
+    )
 
-        # Oculta _key (id interno)
-        gb.configure_column("_key", hide=True)
+    # Guarda EDICIONES de los campos meta en session_state.shortlist_df
+    if len(edited):
+        # actualiza meta cols manteniendo las claves Player/Squad/Season
+        upd = edited[["Player","Squad","Season"] + meta_cols].copy()
+        if len(st.session_state.shortlist_df):
+            idx_base = st.session_state.shortlist_df.set_index(["Player","Squad","Season"])
+            idx_upd  = upd.set_index(["Player","Squad","Season"])
+            # Solo columnas meta
+            for c in meta_cols:
+                if c in idx_upd.columns:
+                    idx_base.loc[idx_upd.index, c] = idx_upd[c]
+            st.session_state.shortlist_df = idx_base.reset_index()[core_cols]
+        else:
+            # si estaba vacío y el editor tiene filas (no debería), mantenemos core_cols
+            st.session_state.shortlist_df = upd[core_cols].copy()
 
-        # Selección múltiple por clic/checkbox
-        gb.configure_selection(selection_mode="multiple", use_checkbox=True)
-        gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=25)
-        gb.configure_side_bar()
-
-        grid = AgGrid(
-            disp_df,
-            gridOptions=gb.build(),
-            theme="streamlit",
-            update_mode=GridUpdateMode.MODEL_CHANGED,  # recoge ediciones
-            columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
-            height=560,
-            allow_unsafe_jscode=True,
-            enable_enterprise_modules=False,
-        )
-
-        # 1) Ediciones -> guardamos en session_state.shortlist_df
-        edited_df = grid["data"].rename(columns=back_map)
-        # preserva solo core (las métricas extra son solo display)
-        edited_core = edited_df[core_cols + ["_key"]].copy()
-
-        # reconstruye el df base con las ediciones según _key
-        if len(edited_core):
-            base_by_key = short_df.copy()
-            if len(base_by_key):
-                base_by_key["_key"] = base_by_key[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
-                base_by_key = base_by_key.set_index("_key")
-                edited_core = edited_core.set_index("_key")
-                # aplica cambios únicamente a meta cols (y mantiene base_cols tal cual editados si cambiaste Notas, etc.)
-                cols_to_update = [c for c in core_cols if c in edited_core.columns]
-                base_by_key.loc[edited_core.index, cols_to_update] = edited_core[cols_to_update]
-                st.session_state.shortlist_df = base_by_key.reset_index(drop=True)[core_cols]
-            else:
-                # si antes estaba vacío y ahora hay filas (no debería suceder aquí), igual lo guardamos
-                st.session_state.shortlist_df = edited_core.reset_index(drop=True)[core_cols]
-
-        # 2) Seleccionados -> claves internas
-        sel_rows = grid["selected_rows"] or []
-        grid_sel_keys = [r["_key"] for r in sel_rows if "_key" in r]
+    # Filas seleccionadas para borrar
+    sel_mask = edited["Sel"].fillna(False) if len(edited) else pd.Series([], dtype=bool)
+    to_delete_keys = []
+    if sel_mask.any():
+        to_delete_keys = edited.loc[sel_mask, ["Player","Squad","Season"]].astype(str).agg("|".join, axis=1).tolist()
 
 with right:
     st.markdown("### Acciones")
-    if grid_sel_keys:
-        st.success(f"{len(grid_sel_keys)} jugador(es) seleccionado(s)")
+    if to_delete_keys:
+        st.success(f"{len(to_delete_keys)} jugador(es) marcado(s) para borrar")
     else:
-        st.caption("Selecciona uno o varios jugadores en la tabla para eliminar.")
+        st.caption("Marca la casilla **Sel** de la fila que quieres eliminar.")
 
-    # Eliminar seleccionados (1..n)
-    if st.button("🗑️ Eliminar seleccionado(s)", use_container_width=True, disabled=(len(grid_sel_keys)==0)):
-        if len(st.session_state.shortlist_df):
+    # Eliminar seleccionado(s)
+    if st.button("🗑️ Eliminar seleccionado(s)", use_container_width=True, disabled=(len(to_delete_keys)==0)):
+        if len(st.session_state.shortlist_df) and to_delete_keys:
             cur_keys = st.session_state.shortlist_df[["Player","Squad","Season"]].astype(str).agg("|".join, axis=1)
-            mask_keep = ~cur_keys.isin(set(grid_sel_keys))
-            st.session_state.shortlist_df = st.session_state.shortlist_df.loc[mask_keep].reset_index(drop=True)
+            keep = ~cur_keys.isin(set(to_delete_keys))
+            st.session_state.shortlist_df = st.session_state.shortlist_df.loc[keep].reset_index(drop=True)
         st.rerun()
 
-    # Descargar shortlist
+    # (opcional) descarga CSV
     st.download_button(
         "⬇️ Descargar shortlist (CSV)",
         data=st.session_state.shortlist_df.to_csv(index=False).encode("utf-8-sig"),
@@ -1410,7 +1371,7 @@ with right:
         use_container_width=True
     )
 
-    # Vaciar shortlist (a prueba de errores)
-    if st.button("🧹 Vaciar shortlist", type="secondary", use_container_width=True):
-        st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
-        st.rerun()
+    # **Sin** botón "Vaciar shortlist" para evitar errores. Si lo quieres de vuelta sin fallos:
+    # if st.button("🧹 Vaciar shortlist", type="secondary", use_container_width=True):
+    #     st.session_state.shortlist_df = pd.DataFrame(columns=core_cols)
+    #     st.rerun()
