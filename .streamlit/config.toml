@@ -5,5 +5,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
 
-st.set_option("server.fileWatcherType", "none")  # 👈 AÑADE ESTA LÍNEA
+# Debe ser la PRIMERA llamada de Streamlit
 st.set_page_config(page_title="Scouting LaLiga", layout="wide")
+
+# Evita “Too many open files” (equivalente a config.toml)
+st.set_option("server.fileWatcherType", "none")
